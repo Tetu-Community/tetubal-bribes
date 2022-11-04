@@ -150,7 +150,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   function updateEpoch(bytes32 _epochId, uint256 _roundNumber, uint256 _deadline)
     external
     onlyRole(DEFAULT_ADMIN_ROLE)
-    epochExistsAndIsCurrent(_epochId)
+    epochExists(_epochId)
     nonReentrant
   {
     Types.Epoch memory epoch = epochs[_epochId];
@@ -186,6 +186,14 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     emit BribeRemoved(_epochId, _bribeId);
   }
 
+  function rescueToken(address _token, uint256 _amount)
+    external
+    onlyRole(DEFAULT_ADMIN_ROLE)
+    nonReentrant
+  {
+    IERC20(_token).safeTransfer(msg.sender, _amount);
+  }
+
   // -- Internal --
 
   // transfer token with additional balance checks
@@ -193,7 +201,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     uint256 balanceBefore = IERC20(_token).balanceOf(address(this));
     IERC20(_token).safeTransferFrom(msg.sender, address(this), _amount);
     uint256 amountReceived = IERC20(_token).balanceOf(address(this)) - balanceBefore;
-    require(amountReceived == _amount, "BV: issue transferrring token");
+    require(amountReceived == _amount, "BV: issue transferring token");
   }
 
   // withdraws bribe to msg.sender
