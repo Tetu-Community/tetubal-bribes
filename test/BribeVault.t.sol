@@ -95,9 +95,44 @@ contract BribeVaultTest is Test {
     assertEq(newBribesByEpoch[0].amount, 20 * 1e18);
   }
 
-  // TODO:
-  function testWithdrawBribes() public {}
-  function testRemoveBribe() public {}
+  function testWithdrawBribes() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
+
+    _transferWMATICFromWhale();
+
+    bytes32 gaugeId = keccak256("this is the gauge name");
+    WMATIC.approve(address(instance), type(uint256).max);
+    instance.createBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
+
+    // can't withdraw too early
+    vm.expectRevert();
+    instance.withdrawBribes(epochId);
+
+    vm.warp(block.timestamp + 10);
+    uint256 balBefore = WMATIC.balanceOf(address(this));
+    instance.withdrawBribes(epochId);
+    uint256 gotWmatic = WMATIC.balanceOf(address(this)) - balBefore;
+    assertEq(gotWmatic, 10 * 1e18);
+  }
+
+  function testRemoveBribe() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
+
+    _transferWMATICFromWhale();
+
+    bytes32 gaugeId = keccak256("this is the gauge name");
+    WMATIC.approve(address(instance), type(uint256).max);
+    bytes32 bribeId = instance.createBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
+
+    Types.Bribe[] memory bribesByEpoch = instance.bribesByEpoch(epochId);
+    assertEq(bribesByEpoch.length, 1);
+
+    instance.removeBribe(epochId, bribeId, false);
+    Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
+    assertEq(newBribesByEpoch.length, 0);
+  }
 
   function _transferWMATICFromWhale() internal {
     vm.prank(0xBA12222222228d8Ba445958a75a0704d566BF2C8);
