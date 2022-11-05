@@ -3,7 +3,6 @@ pragma solidity 0.8.17;
 
 import "forge-std/Test.sol";
 import "../src/BribeVault.sol";
-import "../src/BribeVaultProxy.sol";
 
 contract BribeVaultTest is Test {
   IERC20 WMATIC = IERC20(0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270);
