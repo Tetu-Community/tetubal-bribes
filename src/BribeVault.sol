@@ -59,7 +59,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   IBribeDistributor public bribeDistributor;
   IPriceCalculator public priceCalculator;
-  uint256 public minBribeAmountUsdc; // with 18 decimals of precision
+  uint256 public minBribeAmountUsd; // with 18 decimals of precision
 
   // -- Modifiers --
 
@@ -83,13 +83,13 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   function initialize(
     address _bribeDistributor,
     address _priceCalculator,
-    uint256 _minBribeAmountUsdc
+    uint256 _minBribeAmountUsd
   ) external initializer {
     _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     _grantRole(OPERATOR_ROLE, msg.sender);
     _setBribeDistributor(_bribeDistributor);
     _setPriceCalculator(_priceCalculator);
-    _setMinBribeAmountUsdc(_minBribeAmountUsdc);
+    _setMinBribeAmountUsd(_minBribeAmountUsd);
   }
 
   // -- View functions --
@@ -228,9 +228,9 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     _setPriceCalculator(_priceCalculator);
   }
 
-  /// @dev Set the min bribe amount in USDC with 18 decimals of precision
-  function setMinBribeAmountUsdc(uint256 _minBribeAmountUsdc) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    _setMinBribeAmountUsdc(_minBribeAmountUsdc);
+  /// @dev Set the min bribe amount in USD with 18 decimals of precision
+  function setMinBribeAmountUsd(uint256 _minBribeAmountUsd) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setMinBribeAmountUsd(_minBribeAmountUsd);
   }
 
   /// @dev Withdraw any token to msg.sender, restricted to admin only
@@ -254,9 +254,9 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     priceCalculator = IPriceCalculator(_priceCalculator);
   }
 
-  function _setMinBribeAmountUsdc(uint256 _minBribeAmountUsdc) internal {
-    require(_minBribeAmountUsdc > 0, "BV: min bribe amount cannot be zero");
-    minBribeAmountUsdc = _minBribeAmountUsdc;
+  function _setMinBribeAmountUsd(uint256 _minBribeAmountUsd) internal {
+    require(_minBribeAmountUsd > 0, "BV: min bribe amount cannot be zero");
+    minBribeAmountUsd = _minBribeAmountUsd;
   }
 
   // transfer in a token with additional balance checks to disallow transfer tax tokens
@@ -284,8 +284,8 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     // depositors on the allowlist can deposit any non-zero bribe
     if (hasRole(ALLOWLIST_DEPOSITOR_ROLE, _briber)) return;
 
-    // other users must deposit a minimum amount in USDC
-    uint256 amountInUsdc = _amount * priceCalculator.getPriceWithDefaultOutput(_token) / 1e18;
-    require(amountInUsdc >= minBribeAmountUsdc, "BV: bribe amount in USDC too low");
+    // other users must deposit a minimum amount in USD
+    uint256 amountInUsd = _amount * priceCalculator.getPriceWithDefaultOutput(_token) / 1e18;
+    require(amountInUsd >= minBribeAmountUsd, "BV: bribe amount in USD too low");
   }
 }
