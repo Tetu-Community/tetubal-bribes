@@ -7,9 +7,16 @@ import "openzeppelin-contracts/token/ERC20/utils/SafeERC20.sol";
 import "openzeppelin-contracts/access/AccessControl.sol";
 import "openzeppelin-contracts/proxy/utils/Initializable.sol";
 import "openzeppelin-contracts/security/ReentrancyGuard.sol";
+import "./interfaces/IBribeDistributor.sol";
 import "./Types.sol";
 
-contract BribeDistributor is UUPSUpgradeable, AccessControl, Initializable, ReentrancyGuard {
+contract BribeDistributor is
+  IBribeDistributor,
+  UUPSUpgradeable,
+  AccessControl,
+  Initializable,
+  ReentrancyGuard
+{
   using SafeERC20 for IERC20;
 
   // -- Storage --
