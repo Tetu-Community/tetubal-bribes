@@ -36,7 +36,6 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   // -- Constants --
 
-  address constant USDC_ADDRESS = 0xdcFAE11C70F1575faB9d6Bd389a6188aE5524A56;
   bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
   bytes32 public constant ALLOWLIST_DEPOSITOR_ROLE = keccak256("ALLOWLIST_DEPOSITOR_ROLE");
 
@@ -286,7 +285,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     if (hasRole(ALLOWLIST_DEPOSITOR_ROLE, _briber)) return;
 
     // other users must deposit a minimum amount in USDC
-    uint256 amountInUsdc = _amount * priceCalculator.getPrice(_token, USDC_ADDRESS);
+    uint256 amountInUsdc = _amount * priceCalculator.getPriceWithDefaultOutput(_token) / 1e18;
     require(amountInUsdc >= minBribeAmountUsdc, "BV: bribe amount in USDC too low");
   }
 }

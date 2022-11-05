@@ -2,16 +2,19 @@
 pragma solidity 0.8.17;
 
 import "forge-std/Test.sol";
+import "../src/BribeDistributor.sol";
 import "../src/BribeVault.sol";
 
 contract BribeVaultTest is Test {
   IERC20 WMATIC = IERC20(0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270);
   BribeVault public instance;
+  BribeDistributor public distributor;
 
   function setUp() public {
     vm.createSelectFork("polygon", 35200000);
     instance = new BribeVault();
-    instance.initialize(address(1), 0x0B62ad43837A69Ad60289EEea7C6e907e759F6E8, 1 * 1e18);
+    distributor = new BribeDistributor();
+    instance.initialize(address(distributor), 0x0B62ad43837A69Ad60289EEea7C6e907e759F6E8, 1 * 1e18);
   }
 
   function testAccessControl() public {
@@ -66,78 +69,103 @@ contract BribeVaultTest is Test {
     instance.updateEpoch(epochId, 2, newDeadline);
   }
 
-  // function testCreateBribe() public {
-  //   bytes32 epochId = keccak256("this is the proposal title");
-  //   instance.createEpoch(epochId, 1, block.timestamp + 1);
+  function testCreateBribe() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
 
-  //   _transferWMATICFromWhale();
+    _transferWMATICFromWhale();
 
-  //   WMATIC.approve(address(instance), type(uint256).max);
-  //   instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+    WMATIC.approve(address(instance), type(uint256).max);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
-  //   Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
-  //   assertEq(newBribesByEpoch.length, 1);
-  //   assertEq(newBribesByEpoch[0].briber, address(this));
-  //   assertEq(newBribesByEpoch[0].bribeToken, address(WMATIC));
-  //   assertEq(newBribesByEpoch[0].amount, 10 * 1e18);
-  // }
+    Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
+    assertEq(newBribesByEpoch.length, 1);
+    assertEq(newBribesByEpoch[0].briber, address(this));
+    assertEq(newBribesByEpoch[0].bribeToken, address(WMATIC));
+    assertEq(newBribesByEpoch[0].amount, 10 * 1e18);
+  }
 
-  // function testIncreaseBribe() public {
-  //   bytes32 epochId = keccak256("this is the proposal title");
-  //   instance.createEpoch(epochId, 1, block.timestamp + 1);
+  function testCannotCreateTooSmallBribe() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
 
-  //   _transferWMATICFromWhale();
+    _transferWMATICFromWhale();
 
-  //   WMATIC.approve(address(instance), type(uint256).max);
-  //   instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
-  //   instance.increaseBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+    WMATIC.approve(address(instance), type(uint256).max);
+    vm.expectRevert();
+    instance.createBribe(epochId, address(1), address(WMATIC), 9);
+  }
 
-  //   Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
-  //   assertEq(newBribesByEpoch.length, 1);
-  //   assertEq(newBribesByEpoch[0].briber, address(this));
-  //   assertEq(newBribesByEpoch[0].bribeToken, address(WMATIC));
-  //   assertEq(newBribesByEpoch[0].amount, 20 * 1e18);
-  // }
+  function testCanCreateTooSmallBribeIfAllowlisted() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
 
-  // function testWithdrawBribes() public {
-  //   bytes32 epochId = keccak256("this is the proposal title");
-  //   instance.createEpoch(epochId, 1, block.timestamp + 1);
+    _transferWMATICFromWhale();
 
-  //   _transferWMATICFromWhale();
+    WMATIC.approve(address(instance), type(uint256).max);
+    instance.grantRole(instance.ALLOWLIST_DEPOSITOR_ROLE(), address(this));
+    instance.createBribe(epochId, address(1), address(WMATIC), 9);
+  }
 
-  //   WMATIC.approve(address(instance), type(uint256).max);
-  //   instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+  function testIncreaseBribe() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
 
-  //   // can't withdraw too early
-  //   vm.expectRevert();
-  //   instance.withdrawBribes(epochId);
+    _transferWMATICFromWhale();
 
-  //   vm.warp(block.timestamp + 10);
-  //   uint256 balBefore = WMATIC.balanceOf(address(this));
-  //   instance.withdrawBribes(epochId);
-  //   uint256 gotWmatic = WMATIC.balanceOf(address(this)) - balBefore;
-  //   assertEq(gotWmatic, 10 * 1e18);
-  // }
+    WMATIC.approve(address(instance), type(uint256).max);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+    instance.increaseBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
-  // function testRemoveBribe() public {
-  //   bytes32 epochId = keccak256("this is the proposal title");
-  //   instance.createEpoch(epochId, 1, block.timestamp + 1);
+    Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
+    assertEq(newBribesByEpoch.length, 1);
+    assertEq(newBribesByEpoch[0].briber, address(this));
+    assertEq(newBribesByEpoch[0].bribeToken, address(WMATIC));
+    assertEq(newBribesByEpoch[0].amount, 20 * 1e18);
+  }
 
-  //   _transferWMATICFromWhale();
+  function testWithdrawBribes() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
 
-  //   WMATIC.approve(address(instance), type(uint256).max);
-  //   bytes32 bribeId = instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+    _transferWMATICFromWhale();
 
-  //   Types.Bribe[] memory bribesByEpoch = instance.bribesByEpoch(epochId);
-  //   assertEq(bribesByEpoch.length, 1);
+    WMATIC.approve(address(instance), type(uint256).max);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
-  //   instance.removeBribe(epochId, bribeId, false);
-  //   Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
-  //   assertEq(newBribesByEpoch.length, 0);
-  // }
+    // can't withdraw too early
+    vm.expectRevert();
+    instance.withdrawBribes(epochId);
 
-  // function _transferWMATICFromWhale() internal {
-  //   vm.prank(0xBA12222222228d8Ba445958a75a0704d566BF2C8);
-  //   WMATIC.transfer(address(this), 1000 * 1e18);
-  // }
+    vm.warp(block.timestamp + 10);
+    uint256 balBefore = WMATIC.balanceOf(address(distributor));
+    instance.withdrawBribes(epochId);
+    uint256 gotWmatic = WMATIC.balanceOf(address(distributor)) - balBefore;
+    assertEq(gotWmatic, 10 * 1e18);
+  }
+
+  function testRejectBribe() public {
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
+
+    _transferWMATICFromWhale();
+
+    WMATIC.approve(address(instance), type(uint256).max);
+    bytes32 bribeId = instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+
+    Types.Bribe[] memory bribesByEpoch = instance.bribesByEpoch(epochId);
+    assertEq(bribesByEpoch.length, 1);
+
+    uint256 balBefore = WMATIC.balanceOf(address(this));
+    instance.rejectBribe(epochId, bribeId);
+    uint256 gotWmatic = WMATIC.balanceOf(address(this)) - balBefore;
+    assertEq(gotWmatic, 10 * 1e18);
+    Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
+    assertEq(newBribesByEpoch.length, 0);
+  }
+
+  function _transferWMATICFromWhale() internal {
+    vm.prank(0xBA12222222228d8Ba445958a75a0704d566BF2C8);
+    WMATIC.transfer(address(this), 1000 * 1e18);
+  }
 }
