@@ -21,11 +21,11 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   event EpochUpdated(bytes32 epochId, uint256 roundNumber, uint256 deadline);
 
   event BribeCreated(
-    bytes32 epochId, bytes32 bribeId, bytes32 gaugeId, address token, uint256 amount
+    bytes32 epochId, bytes32 bribeId, address gauge, address token, uint256 amount
   );
 
   event BribeIncreased(
-    bytes32 epochId, bytes32 bribeId, bytes32 gaugeId, address token, uint256 increasedByAmount
+    bytes32 epochId, bytes32 bribeId, address gauge, address token, uint256 increasedByAmount
   );
 
   event BribeRemoved(bytes32 epochId, bytes32 bribeId);
@@ -92,41 +92,53 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     return returnBribes;
   }
 
+  function calculateBribeId(bytes32 _epochId, address _gauge, address _token, address _briber)
+    public
+    pure
+    returns (bytes32)
+  {
+    require(_epochId != bytes32(""), "BV: epoch cannot be bytes32(0x)");
+    require(_gauge != address(0), "BV: gauge cannot be address(0)");
+    require(_token != address(0), "BV: token cannot be address(0)");
+    require(_briber != address(0), "BV: briber cannot be address(0)");
+    return keccak256(abi.encodePacked(_epochId, _gauge, _token, _briber));
+  }
+
   // -- User interface --
 
   /// @dev Create a bribe
-  function createBribe(bytes32 _epochId, bytes32 _gaugeId, address _token, uint256 _amount)
+  function createBribe(bytes32 _epochId, address _gauge, address _token, uint256 _amount)
     external
     epochExistsAndIsCurrent(_epochId)
     nonReentrant
     returns (bytes32)
   {
     // check for existing bribe. if exists, user should call increaseBribe() instead
-    bytes32 bribeId = keccak256(abi.encodePacked(_epochId, _token, msg.sender));
+    bytes32 bribeId = calculateBribeId(_epochId, _gauge, _token, msg.sender);
     require(bribes[bribeId].briber == address(0), "BV: bribe already exists");
 
     _receiveBribeToken(_token, _amount);
     epochBribes[_epochId].add(bribeId);
-    bribes[bribeId] = Types.Bribe(msg.sender, _gaugeId, _token, _amount);
-    emit BribeCreated(_epochId, bribeId, _gaugeId, _token, _amount);
+    bribes[bribeId] = Types.Bribe(msg.sender, _gauge, _token, _amount);
+    emit BribeCreated(_epochId, bribeId, _gauge, _token, _amount);
     return bribeId;
   }
 
   /// @dev Increase a bribe
   function increaseBribe(
     bytes32 _epochId,
-    bytes32 _gaugeId,
+    address _gauge,
     address _token,
     uint256 _increaseByAmount
   ) external epochExistsAndIsCurrent(_epochId) nonReentrant returns (bytes32) {
     // check for existing bribe. must exist
-    bytes32 bribeId = keccak256(abi.encodePacked(_epochId, _token, msg.sender));
+    bytes32 bribeId = calculateBribeId(_epochId, _gauge, _token, msg.sender);
     require(bribes[bribeId].briber == msg.sender, "BV: bribe does not exist");
 
     _receiveBribeToken(_token, _increaseByAmount);
     bribes[bribeId] =
-      Types.Bribe(msg.sender, _gaugeId, _token, bribes[bribeId].amount + _increaseByAmount);
-    emit BribeIncreased(_epochId, bribeId, _gaugeId, _token, _increaseByAmount);
+      Types.Bribe(msg.sender, _gauge, _token, bribes[bribeId].amount + _increaseByAmount);
+    emit BribeIncreased(_epochId, bribeId, _gauge, _token, _increaseByAmount);
     return bribeId;
   }
 

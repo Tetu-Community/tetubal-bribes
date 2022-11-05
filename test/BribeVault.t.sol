@@ -65,9 +65,8 @@ contract BribeVaultTest is Test {
 
     _transferWMATICFromWhale();
 
-    bytes32 gaugeId = keccak256("this is the gauge name");
     WMATIC.approve(address(instance), type(uint256).max);
-    instance.createBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
     Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
     assertEq(newBribesByEpoch.length, 1);
@@ -82,10 +81,9 @@ contract BribeVaultTest is Test {
 
     _transferWMATICFromWhale();
 
-    bytes32 gaugeId = keccak256("this is the gauge name");
     WMATIC.approve(address(instance), type(uint256).max);
-    instance.createBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
-    instance.increaseBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+    instance.increaseBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
     Types.Bribe[] memory newBribesByEpoch = instance.bribesByEpoch(epochId);
     assertEq(newBribesByEpoch.length, 1);
@@ -100,9 +98,8 @@ contract BribeVaultTest is Test {
 
     _transferWMATICFromWhale();
 
-    bytes32 gaugeId = keccak256("this is the gauge name");
     WMATIC.approve(address(instance), type(uint256).max);
-    instance.createBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
     // can't withdraw too early
     vm.expectRevert();
@@ -121,9 +118,8 @@ contract BribeVaultTest is Test {
 
     _transferWMATICFromWhale();
 
-    bytes32 gaugeId = keccak256("this is the gauge name");
     WMATIC.approve(address(instance), type(uint256).max);
-    bytes32 bribeId = instance.createBribe(epochId, gaugeId, address(WMATIC), 10 * 1e18);
+    bytes32 bribeId = instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
 
     Types.Bribe[] memory bribesByEpoch = instance.bribesByEpoch(epochId);
     assertEq(bribesByEpoch.length, 1);

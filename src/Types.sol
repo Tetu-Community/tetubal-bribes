@@ -9,7 +9,7 @@ library Types {
 
   struct Bribe {
     address briber;
-    bytes32 gaugeIdentifier;
+    address gauge;
     address bribeToken;
     uint256 amount;
   }
