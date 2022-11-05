@@ -20,8 +20,6 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   event EpochCreated(bytes32 epochId, uint256 roundNumber, uint256 deadline);
 
-  event EpochUpdated(bytes32 epochId, uint256 roundNumber, uint256 deadline);
-
   event BribeCreated(
     bytes32 epochId, bytes32 bribeId, address gauge, address token, uint256 amount
   );
@@ -92,7 +90,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     _setMinBribeAmountUsd(_minBribeAmountUsd);
   }
 
-  // -- View functions --
+  // -- Read functions --
 
   /// @dev Get all bribes for a given epoch
   function bribesByEpoch(bytes32 _epochId)
@@ -128,10 +126,11 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     nonReentrant
     returns (bytes32)
   {
-    // check for existing bribe. if exists, user should call increaseBribe() instead
     bytes32 bribeId = calculateBribeId(_epochId, _gauge, _token, msg.sender);
-    require(bribes[bribeId].briber == address(0), "BV: bribe already exists");
-    _validateBribe(_token, _amount, msg.sender);
+    require(
+      bribes[bribeId].briber == address(0), "BV: bribe already exists, call increaseBribe() instead"
+    );
+    _validateMinBribeAmount(_token, _amount, msg.sender);
     _receiveBribeToken(_token, _amount);
     epochBribes[_epochId].add(bribeId);
     bribes[bribeId] = Types.Bribe(msg.sender, _gauge, _token, _amount);
@@ -146,10 +145,8 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     address _token,
     uint256 _increaseByAmount
   ) external epochExistsAndIsCurrent(_epochId) nonReentrant returns (bytes32) {
-    // check for existing bribe. must exist
     bytes32 bribeId = calculateBribeId(_epochId, _gauge, _token, msg.sender);
     require(bribes[bribeId].briber == msg.sender, "BV: bribe does not exist");
-
     _receiveBribeToken(_token, _increaseByAmount);
     bribes[bribeId] =
       Types.Bribe(msg.sender, _gauge, _token, bribes[bribeId].amount + _increaseByAmount);
@@ -171,21 +168,6 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     require(_deadline < (block.timestamp + 14 days), "BV: deadline too far in future");
     epochs[_epochId] = Types.Epoch(_roundNumber, _deadline);
     emit EpochCreated(_epochId, _roundNumber, _deadline);
-  }
-
-  /// @dev Update an epoch. Probably not necessary, but why not...
-  function updateEpoch(bytes32 _epochId, uint256 _roundNumber, uint256 _deadline)
-    external
-    onlyRole(OPERATOR_ROLE)
-    epochExists(_epochId)
-  {
-    Types.Epoch memory epoch = epochs[_epochId];
-    require(epoch.roundNumber != 0, "BV: epoch does not exist");
-    require(_roundNumber > 0, "BV: invalid round number");
-    require(_deadline > block.timestamp, "BV: deadline must be future");
-    require(_deadline < (block.timestamp + 14 days), "BV: deadline too far in future");
-    epochs[_epochId] = Types.Epoch(_roundNumber, _deadline);
-    emit EpochUpdated(_epochId, _roundNumber, _deadline);
   }
 
   /// @dev Withdraw bribes for an epoch after the deadline has passed
@@ -278,7 +260,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     emit BribeWithdrawn(_epochId, _bribeId, bribes[_bribeId].bribeToken, bribes[_bribeId].amount);
   }
 
-  function _validateBribe(address _token, uint256 _amount, address _briber) internal view {
+  function _validateMinBribeAmount(address _token, uint256 _amount, address _briber) internal view {
     require(_amount > 0, "BV: bribe amount cannot be zero");
 
     // depositors on the allowlist can deposit any non-zero bribe

@@ -49,26 +49,6 @@ contract BribeVaultTest is Test {
     instance.createEpoch(epochId, 1, deadline);
   }
 
-  function testUpdateEpoch() public {
-    bytes32 epochId = keccak256("this is the proposal title");
-    uint256 deadline = block.timestamp + 1;
-    instance.createEpoch(epochId, 1, deadline);
-    uint256 newDeadline = block.timestamp + 2;
-    instance.updateEpoch(epochId, 2, newDeadline);
-    (uint256 gotRoundNumber, uint256 gotDeadline) = instance.epochs(epochId);
-    assertEq(gotRoundNumber, 2);
-    assertEq(gotDeadline, newDeadline);
-  }
-
-  function testCannotUpdateEpochToPast() public {
-    bytes32 epochId = keccak256("this is the proposal title");
-    uint256 deadline = block.timestamp + 1;
-    instance.createEpoch(epochId, 1, deadline);
-    uint256 newDeadline = block.timestamp - 1;
-    vm.expectRevert();
-    instance.updateEpoch(epochId, 2, newDeadline);
-  }
-
   function testCreateBribe() public {
     bytes32 epochId = keccak256("this is the proposal title");
     instance.createEpoch(epochId, 1, block.timestamp + 1);
