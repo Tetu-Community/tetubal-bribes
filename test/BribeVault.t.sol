@@ -12,8 +12,10 @@ contract BribeVaultTest is Test {
 
   function setUp() public {
     vm.createSelectFork("polygon", 35200000);
-    instance = new BribeVault();
     distributor = new BribeDistributor();
+    distributor.initialize();
+
+    instance = new BribeVault();
     instance.initialize(address(distributor), 0x0B62ad43837A69Ad60289EEea7C6e907e759F6E8, 1 * 1e18);
   }
 
@@ -122,6 +124,16 @@ contract BribeVaultTest is Test {
     instance.withdrawBribes(epochId);
     uint256 gotWmatic = WMATIC.balanceOf(address(distributor)) - balBefore;
     assertEq(gotWmatic, 10 * 1e18);
+
+    // distribute
+    address[] memory recipients = new address[](1);
+    recipients[0] = address(this);
+    uint256[] memory amounts = new uint[](1);
+    amounts[0] = 777;
+    uint256 balBeforeDistribute = WMATIC.balanceOf(address(this));
+    distributor.distributeToken(address(WMATIC), recipients, amounts);
+    uint256 gotWmaticDistribute = WMATIC.balanceOf(address(this)) - balBeforeDistribute;
+    assertEq(gotWmaticDistribute, 777);
   }
 
   function testRejectBribe() public {
