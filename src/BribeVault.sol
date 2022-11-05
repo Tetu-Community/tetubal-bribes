@@ -8,6 +8,8 @@ import "openzeppelin-contracts/access/AccessControl.sol";
 import "openzeppelin-contracts/proxy/utils/Initializable.sol";
 import "openzeppelin-contracts/utils/structs/EnumerableSet.sol";
 import "openzeppelin-contracts/security/ReentrancyGuard.sol";
+import "./interfaces/IBribeDistributor.sol";
+import "./interfaces/IPriceCalculator.sol";
 import "./Types.sol";
 
 contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, ReentrancyGuard {
@@ -28,9 +30,15 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     bytes32 epochId, bytes32 bribeId, address gauge, address token, uint256 increasedByAmount
   );
 
-  event BribeRemoved(bytes32 epochId, bytes32 bribeId);
+  event BribeRejected(bytes32 epochId, bytes32 bribeId);
 
   event BribeWithdrawn(bytes32 epochId, bytes32 bribeId, address bribeToken, uint256 amount);
+
+  // -- Constants --
+
+  address constant USDC_ADDRESS = 0xdcFAE11C70F1575faB9d6Bd389a6188aE5524A56;
+  bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+  bytes32 public constant ALLOWLIST_DEPOSITOR_ROLE = keccak256("ALLOWLIST_DEPOSITOR_ROLE");
 
   // -- Storage --
 
@@ -49,6 +57,10 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   // Each bribe contains information about the bribe. The map key is the bribe
   // identifier hash.
   mapping(bytes32 => Types.Bribe) bribes;
+
+  IBribeDistributor public bribeDistributor;
+  IPriceCalculator public priceCalculator;
+  uint256 public minBribeAmountUsdc; // with 18 decimals of precision
 
   // -- Modifiers --
 
@@ -69,8 +81,16 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   // -- Initializer --
 
-  function initialize() external initializer {
+  function initialize(
+    address _bribeDistributor,
+    address _priceCalculator,
+    uint256 _minBribeAmountUsdc
+  ) external initializer {
     _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+    _grantRole(OPERATOR_ROLE, msg.sender);
+    _setBribeDistributor(_bribeDistributor);
+    _setPriceCalculator(_priceCalculator);
+    _setMinBribeAmountUsdc(_minBribeAmountUsdc);
   }
 
   // -- View functions --
@@ -97,10 +117,6 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     pure
     returns (bytes32)
   {
-    require(_epochId != bytes32(""), "BV: epoch cannot be bytes32(0x)");
-    require(_gauge != address(0), "BV: gauge cannot be address(0)");
-    require(_token != address(0), "BV: token cannot be address(0)");
-    require(_briber != address(0), "BV: briber cannot be address(0)");
     return keccak256(abi.encodePacked(_epochId, _gauge, _token, _briber));
   }
 
@@ -116,7 +132,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     // check for existing bribe. if exists, user should call increaseBribe() instead
     bytes32 bribeId = calculateBribeId(_epochId, _gauge, _token, msg.sender);
     require(bribes[bribeId].briber == address(0), "BV: bribe already exists");
-
+    _validateBribe(_token, _amount, msg.sender);
     _receiveBribeToken(_token, _amount);
     epochBribes[_epochId].add(bribeId);
     bribes[bribeId] = Types.Bribe(msg.sender, _gauge, _token, _amount);
@@ -142,62 +158,83 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     return bribeId;
   }
 
-  // -- Admin interface --
+  // -- Operator interface --
 
   /// @dev Create an epoch
   function createEpoch(bytes32 _epochId, uint256 _roundNumber, uint256 _deadline)
     external
-    onlyRole(DEFAULT_ADMIN_ROLE)
-    nonReentrant
+    onlyRole(OPERATOR_ROLE)
   {
     Types.Epoch memory epoch = epochs[_epochId];
     require(epoch.roundNumber == 0, "BV: epoch already exists");
     require(_roundNumber > 0, "BV: invalid round number");
     require(_deadline > block.timestamp, "BV: deadline must be future");
+    require(_deadline < (block.timestamp + 14 days), "BV: deadline too far in future");
     epochs[_epochId] = Types.Epoch(_roundNumber, _deadline);
     emit EpochCreated(_epochId, _roundNumber, _deadline);
   }
 
-  /// @dev Update an epoch. Probably not necessary, but why not
+  /// @dev Update an epoch. Probably not necessary, but why not...
   function updateEpoch(bytes32 _epochId, uint256 _roundNumber, uint256 _deadline)
     external
-    onlyRole(DEFAULT_ADMIN_ROLE)
+    onlyRole(OPERATOR_ROLE)
     epochExists(_epochId)
-    nonReentrant
   {
     Types.Epoch memory epoch = epochs[_epochId];
     require(epoch.roundNumber != 0, "BV: epoch does not exist");
     require(_roundNumber > 0, "BV: invalid round number");
     require(_deadline > block.timestamp, "BV: deadline must be future");
+    require(_deadline < (block.timestamp + 14 days), "BV: deadline too far in future");
     epochs[_epochId] = Types.Epoch(_roundNumber, _deadline);
     emit EpochUpdated(_epochId, _roundNumber, _deadline);
   }
 
   /// @dev Withdraw bribes for an epoch after the deadline has passed
-  function withdrawBribes(bytes32 _epochId) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+  function withdrawBribes(bytes32 _epochId) external onlyRole(OPERATOR_ROLE) nonReentrant {
     Types.Epoch memory epoch = epochs[_epochId];
     require(epoch.roundNumber != 0, "BV: epoch does not exist");
     require(epoch.deadline < block.timestamp, "BV: deadline must be past");
 
     // withdraw all bribes for this epoch
-    for (uint256 i = 0; i < epochBribes[_epochId].length(); i++) {
+    uint256 numBribes = epochBribes[_epochId].length();
+    for (uint256 i = 0; i < numBribes; i++) {
       _withdrawBribe(_epochId, epochBribes[_epochId].at(i));
     }
   }
 
-  /// @dev Removes a individual bribe, could be used in case of a griefing attack, etc
-  function removeBribe(bytes32 _epochId, bytes32 _bribeId, bool _shouldWithdraw)
+  /// @dev Reject an individual bribe and return the token to briber
+  function rejectBribe(bytes32 _epochId, bytes32 _bribeId)
     external
-    onlyRole(DEFAULT_ADMIN_ROLE)
+    onlyRole(OPERATOR_ROLE)
     epochExists(_epochId)
     nonReentrant
   {
     require(bribes[_bribeId].briber != address(0), "BV: bribe does not exist");
     epochBribes[_epochId].remove(_bribeId);
-    if (_shouldWithdraw) _withdrawBribe(_epochId, _bribeId);
-    emit BribeRemoved(_epochId, _bribeId);
+    IERC20(bribes[_bribeId].bribeToken).safeTransfer(
+      bribes[_bribeId].briber, bribes[_bribeId].amount
+    );
+    emit BribeRejected(_epochId, _bribeId);
   }
 
+  // -- Admin interface --
+
+  /// @dev Set the bribe distributor address
+  function setBribeDistributor(address _bribeDistributor) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setBribeDistributor(_bribeDistributor);
+  }
+
+  /// @dev Set the price calculator address
+  function setPriceCalculator(address _priceCalculator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setPriceCalculator(_priceCalculator);
+  }
+
+  /// @dev Set the min bribe amount in USDC with 18 decimals of precision
+  function setMinBribeAmountUsdc(uint256 _minBribeAmountUsdc) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setMinBribeAmountUsdc(_minBribeAmountUsdc);
+  }
+
+  /// @dev Withdraw any token to msg.sender, restricted to admin only
   function rescueToken(address _token, uint256 _amount)
     external
     onlyRole(DEFAULT_ADMIN_ROLE)
@@ -208,17 +245,48 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   // -- Internal --
 
-  // transfer token with additional balance checks
+  function _setBribeDistributor(address _bribeDistributor) internal {
+    require(_bribeDistributor != address(0), "BV: bribe distributor cannot be address(0)");
+    bribeDistributor = IBribeDistributor(_bribeDistributor);
+  }
+
+  function _setPriceCalculator(address _priceCalculator) internal {
+    require(_priceCalculator != address(0), "BV: price calculator cannot be address(0)");
+    priceCalculator = IPriceCalculator(_priceCalculator);
+  }
+
+  function _setMinBribeAmountUsdc(uint256 _minBribeAmountUsdc) internal {
+    require(_minBribeAmountUsdc > 0, "BV: min bribe amount cannot be zero");
+    minBribeAmountUsdc = _minBribeAmountUsdc;
+  }
+
+  // transfer in a token with additional balance checks to disallow transfer tax tokens
   function _receiveBribeToken(address _token, uint256 _amount) internal {
     uint256 balanceBefore = IERC20(_token).balanceOf(address(this));
     IERC20(_token).safeTransferFrom(msg.sender, address(this), _amount);
     uint256 amountReceived = IERC20(_token).balanceOf(address(this)) - balanceBefore;
-    require(amountReceived == _amount, "BV: issue transferring token");
+    require(
+      amountReceived == _amount,
+      "BV: issue transferring token, transfer tax tokens are not supported"
+    );
   }
 
-  // withdraws bribe to msg.sender
+  // withdraws bribe to bribe distributor
   function _withdrawBribe(bytes32 _epochId, bytes32 _bribeId) internal {
-    IERC20(bribes[_bribeId].bribeToken).safeTransfer(msg.sender, bribes[_bribeId].amount);
+    IERC20(bribes[_bribeId].bribeToken).safeTransfer(
+      address(bribeDistributor), bribes[_bribeId].amount
+    );
     emit BribeWithdrawn(_epochId, _bribeId, bribes[_bribeId].bribeToken, bribes[_bribeId].amount);
+  }
+
+  function _validateBribe(address _token, uint256 _amount, address _briber) internal view {
+    require(_amount > 0, "BV: bribe amount cannot be zero");
+
+    // depositors on the allowlist can deposit any non-zero bribe
+    if (hasRole(ALLOWLIST_DEPOSITOR_ROLE, _briber)) return;
+
+    // other users must deposit a minimum amount in USDC
+    uint256 amountInUsdc = _amount * priceCalculator.getPrice(_token, USDC_ADDRESS);
+    require(amountInUsdc >= minBribeAmountUsdc, "BV: bribe amount in USDC too low");
   }
 }
