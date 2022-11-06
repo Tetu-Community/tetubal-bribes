@@ -196,6 +196,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     IERC20(bribes[_bribeId].bribeToken).safeTransfer(
       bribes[_bribeId].briber, bribes[_bribeId].amount
     );
+    delete bribes[_bribeId];
     emit BribeRejected(_epochId, _bribeId);
   }
 
