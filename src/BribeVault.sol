@@ -9,7 +9,7 @@ import "openzeppelin-contracts/proxy/utils/Initializable.sol";
 import "openzeppelin-contracts/utils/structs/EnumerableSet.sol";
 import "openzeppelin-contracts/security/ReentrancyGuard.sol";
 import "./interfaces/IBribeDistributor.sol";
-import "./interfaces/IPriceCalculator.sol";
+import "./interfaces/ITetuLiquidator.sol";
 import "./Types.sol";
 
 contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, ReentrancyGuard {
@@ -34,6 +34,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   // -- Constants --
 
+  address constant USDC_ADDRESS = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174;
   bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
   bytes32 public constant ALLOWLIST_DEPOSITOR_ROLE = keccak256("ALLOWLIST_DEPOSITOR_ROLE");
 
@@ -56,8 +57,8 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   mapping(bytes32 => Types.Bribe) bribes;
 
   IBribeDistributor public bribeDistributor;
-  IPriceCalculator public priceCalculator;
-  uint256 public minBribeAmountUsd; // with 18 decimals of precision
+  ITetuLiquidator public tetuLiquidator;
+  uint256 public minBribeAmountUsdc; // USDC, so 6 decimals of precision
 
   // -- Modifiers --
 
@@ -80,14 +81,14 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   function initialize(
     address _bribeDistributor,
-    address _priceCalculator,
-    uint256 _minBribeAmountUsd
+    address _tetuLiquidator,
+    uint256 _minBribeAmountUsdc
   ) external initializer {
     _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     _grantRole(OPERATOR_ROLE, msg.sender);
     _setBribeDistributor(_bribeDistributor);
-    _setPriceCalculator(_priceCalculator);
-    _setMinBribeAmountUsd(_minBribeAmountUsd);
+    _setTetuLiquidator(_tetuLiquidator);
+    _setMinBribeAmountUsdc(_minBribeAmountUsdc);
   }
 
   // -- Read functions --
@@ -206,13 +207,13 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   }
 
   /// @dev Set the price calculator address
-  function setPriceCalculator(address _priceCalculator) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    _setPriceCalculator(_priceCalculator);
+  function setTetuLiquidator(address _tetuLiquidator) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setTetuLiquidator(_tetuLiquidator);
   }
 
   /// @dev Set the min bribe amount in USD with 18 decimals of precision
-  function setMinBribeAmountUsd(uint256 _minBribeAmountUsd) external onlyRole(DEFAULT_ADMIN_ROLE) {
-    _setMinBribeAmountUsd(_minBribeAmountUsd);
+  function setMinBribeAmountUsdc(uint256 _minBribeAmountUsdc) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setMinBribeAmountUsdc(_minBribeAmountUsdc);
   }
 
   /// @dev Withdraw any token to msg.sender, restricted to admin only
@@ -231,14 +232,14 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     bribeDistributor = IBribeDistributor(_bribeDistributor);
   }
 
-  function _setPriceCalculator(address _priceCalculator) internal {
-    require(_priceCalculator != address(0), "BV: price calculator cannot be address(0)");
-    priceCalculator = IPriceCalculator(_priceCalculator);
+  function _setTetuLiquidator(address _tetuLiquidator) internal {
+    require(_tetuLiquidator != address(0), "BV: price calculator cannot be address(0)");
+    tetuLiquidator = ITetuLiquidator(_tetuLiquidator);
   }
 
-  function _setMinBribeAmountUsd(uint256 _minBribeAmountUsd) internal {
-    require(_minBribeAmountUsd > 0, "BV: min bribe amount cannot be zero");
-    minBribeAmountUsd = _minBribeAmountUsd;
+  function _setMinBribeAmountUsdc(uint256 _minBribeAmountUsdc) internal {
+    require(_minBribeAmountUsdc > 0, "BV: min bribe amount cannot be zero");
+    minBribeAmountUsdc = _minBribeAmountUsdc;
   }
 
   // transfer in a token with additional balance checks to disallow transfer tax tokens
@@ -266,8 +267,8 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     // depositors on the allowlist can deposit any non-zero bribe
     if (hasRole(ALLOWLIST_DEPOSITOR_ROLE, _briber)) return;
 
-    // other users must deposit a minimum amount in USD
-    uint256 amountInUsd = _amount * priceCalculator.getPriceWithDefaultOutput(_token) / 1e18;
-    require(amountInUsd >= minBribeAmountUsd, "BV: bribe amount in USD too low");
+    // other users must deposit a minimum amount in USDC
+    uint256 amountInUsdc = tetuLiquidator.getPrice(_token, USDC_ADDRESS, _amount);
+    require(amountInUsdc >= minBribeAmountUsdc, "BV: bribe amount in USDC too low");
   }
 }

@@ -16,7 +16,7 @@ contract BribeVaultTest is Test {
     distributor.initialize();
 
     instance = new BribeVault();
-    instance.initialize(address(distributor), 0x0B62ad43837A69Ad60289EEea7C6e907e759F6E8, 1 * 1e18);
+    instance.initialize(address(distributor), 0xC737eaB847Ae6A92028862fE38b828db41314772, 1 * 1e6);
   }
 
   function testAccessControl() public {
