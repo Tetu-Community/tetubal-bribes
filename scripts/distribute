@@ -1,0 +1,46 @@
+#!/usr/bin/env node
+
+const { Command } = require('commander')
+const { request, gql } = require('graphql-request')
+
+const program = new Command()
+program.description('Distribute TetuBAL bribes from the tetu-community vault')
+program.requiredOption('-p, --proposalId <id>')
+program.parse()
+
+const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
+
+async function getVotesByProposal (proposalId) {
+  const resp = await request(
+    SNAPSHOT_GRAPHQL_ENDPOINT,
+    gql`
+    query {
+      votes (
+        first: 1000,
+        skip: 0,
+        where: {
+          proposal: "${proposalId}"
+        }
+        orderBy: "created",
+        orderDirection: desc
+      ) {
+        id
+        voter
+        vp
+        choice
+      }
+    }
+  `
+  )
+
+  if (resp.votes >= 1000) throw new Error('too many votes! need to change code.')
+
+  return resp.votes
+}
+
+async function main () {
+  const votes = await getVotesByProposal(program.opts().proposalId)
+  console.log(votes)
+}
+
+main()
