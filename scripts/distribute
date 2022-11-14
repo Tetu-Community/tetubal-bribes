@@ -1,0 +1,191 @@
+#!/usr/bin/env node
+
+const ethers = require('ethers')
+const BigNumber = require('bignumber.js')
+const { Command } = require('commander')
+const { request, gql } = require('graphql-request')
+
+const program = new Command()
+program.description('Distribute TetuBAL bribes from the tetu-community vault')
+program.requiredOption('-p, --proposalId <id>')
+program.option('--bribeProposalId <id>', 'override the bribe proposal (optional)')
+program.option('-d, --dry')
+program.parse()
+
+const TETUBAL_BRIBE_VAULT_ADDRESS = '0x2dE7ab57966f7C98be4252f16350e7B185680020'
+const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
+
+function getProvider (chain) {
+  const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
+  if (!urlStr) throw new Error(`no RPC provider for chain ${chain} found!`)
+  const u = new URL(urlStr)
+  return new ethers.providers.JsonRpcProvider({
+    url: u.origin + u.pathname,
+    user: u.username,
+    password: u.password
+  })
+}
+
+async function getVotesByProposal (proposalId) {
+  const resp = await request(
+    SNAPSHOT_GRAPHQL_ENDPOINT,
+    gql`
+    query {
+      votes (
+        first: 1000,
+        skip: 0,
+        where: {
+          proposal: "${proposalId}"
+        }
+        orderBy: "created",
+        orderDirection: desc
+      ) {
+        id
+        voter
+        vp
+        choice
+      }
+    }
+  `
+  )
+
+  if (resp.votes >= 1000) throw new Error('too many votes! need to update code')
+
+  return resp.votes
+}
+
+async function getChoicesByProposal (proposalId) {
+  const proposalResp = await request(SNAPSHOT_GRAPHQL_ENDPOINT, gql`
+    query {
+      proposals (
+        where: {
+          id: "${proposalId}"
+        }
+      ) {
+        id
+        title
+        body
+        choices
+        start
+        end
+        snapshot
+        state
+        scores
+        scores_by_strategy
+        scores_total
+        scores_updated
+        author
+        space {
+          id
+          name
+        }
+      }
+      }
+  `)
+
+  if (proposalResp.proposals.length === 0) return []
+
+  const ret = {}
+  for (const i in proposalResp.proposals[0].choices) {
+    ret[parseInt(i, 10) + 1] = proposalResp.proposals[0].choices[i].split('(')[1].split(')')[0]
+  }
+  return ret
+}
+
+async function getBribesByProposal (proposalId) {
+  const c = new ethers.Contract(
+    TETUBAL_BRIBE_VAULT_ADDRESS,
+    require('../abi/BribeVault.json'),
+    getProvider('polygon')
+  )
+
+  const res = await c.bribesByEpoch(ethers.utils.keccak256(proposalId))
+
+  const retBribes = []
+
+  for (const b of res) {
+    retBribes.push({
+      gauge: b.gauge,
+      token: b.bribeToken,
+      amount: b.amount
+    })
+  }
+
+  return retBribes
+}
+
+async function main () {
+  const votes = await getVotesByProposal(program.opts().proposalId)
+  const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(program.opts().proposalId)
+  const bribes = await getBribesByProposal(program.opts().bribeProposalId || program.opts().proposalId)
+
+  // gauge => { user => vp }
+  const votesByGauge = {}
+
+  // choice => total
+  const totalsByGauge = {}
+
+  // gauge => { user => percent }
+  const votePercentageByGauge = {}
+
+  // token => { user => amount }
+  const bribeDistributions = {}
+
+  // calculate votes
+  for (const v of votes) {
+    const weightSum = BigNumber.sum(...Object.values(v.choice))
+
+    for (const [choiceNumber, weight] of Object.entries(v.choice)) {
+      const gauge = choiceNumberToGaugeAddressPrefix[choiceNumber]
+      if (!votesByGauge[gauge]) votesByGauge[gauge] = {}
+      votesByGauge[gauge][v.voter] = BigNumber(v.vp).times(weight).div(weightSum)
+    }
+  }
+
+  // calculate totals
+  for (const [gauge, votes] of Object.entries(votesByGauge)) {
+    totalsByGauge[gauge] = BigNumber.sum(...Object.values(votes))
+  }
+
+  // calculate percentage
+  for (const [gauge, votes] of Object.entries(votesByGauge)) {
+    votePercentageByGauge[gauge] = {}
+
+    for (const [user, vp] of Object.entries(votes)) {
+      votePercentageByGauge[gauge][user] = BigNumber(vp).div(totalsByGauge[gauge])
+    }
+  }
+
+  for (const b of bribes) {
+    if (!bribeDistributions[b.token]) bribeDistributions[b.token] = {}
+
+    const matchedKeys = Object.keys(votePercentageByGauge).filter(k => b.gauge.toLowerCase().includes(k.toLowerCase()))
+    if (matchedKeys.length > 1) throw new Error('hash collision???')
+    if (matchedKeys.length === 0) throw new Error(`no votes for bribed gauge? ${b.gauge}`)
+
+    for (const [user, percent] of Object.entries(votePercentageByGauge[matchedKeys[0]])) {
+      if (!bribeDistributions[b.token][user]) bribeDistributions[b.token][user] = BigNumber(0)
+      bribeDistributions[b.token][user] = bribeDistributions[b.token][user].plus(
+        BigNumber(b.amount.toString()).times(percent)
+      )
+    }
+  }
+
+  const distributeTokenCalls = []
+
+  for (const [token, distributions] of Object.entries(bribeDistributions)) {
+    distributeTokenCalls.push([
+      token,
+      Object.keys(distributions),
+      Object.values(distributions).map(bn => bn.toFixed(0, 1)) // no decimals, round down
+    ])
+  }
+
+  if (program.opts().dry) {
+    console.log(distributeTokenCalls)
+  } else {
+    throw new Error('ready to send txs, not yet implemented')
+  }
+}
+
+main()
