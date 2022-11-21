@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// const ethers = require('ethers')
 const BigNumber = require('bignumber.js')
 const axios = require('axios')
 const { Command } = require('commander')
@@ -16,17 +15,6 @@ program.parse()
 
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
 const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
-
-// function getProvider (chain) {
-//   const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
-//   if (!urlStr) throw new Error(`no RPC provider for chain ${chain} found!`)
-//   const u = new URL(urlStr)
-//   return new ethers.providers.JsonRpcProvider({
-//     url: u.origin + u.pathname,
-//     user: u.username,
-//     password: u.password
-//   })
-// }
 
 async function getVotesByProposal (proposalId) {
   const resp = await request(
@@ -161,10 +149,6 @@ async function main () {
       votePercentageByGauge[gauge][user] = BigNumber(vp).div(totalsByGauge[gauge])
     }
   }
-
-  // console.log(JSON.stringify(votePercentageByGauge, null, 2))
-
-  // console.log(JSON.stringify(hhData, null, 2))
 
   for (const [gaugePrefix, data] of Object.entries(votePercentageByGauge)) {
     const matchedProposals = hhData.filter(data => data.proposal.toLowerCase().includes(gaugePrefix.toLowerCase()))
