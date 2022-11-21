@@ -1,0 +1,232 @@
+#!/usr/bin/env node
+
+// const ethers = require('ethers')
+const BigNumber = require('bignumber.js')
+const axios = require('axios')
+const { Command } = require('commander')
+const { request, gql } = require('graphql-request')
+
+const program = new Command()
+program.description('Calculate Hidden Hand bribe distributions')
+program.requiredOption('-ve, --veBAL <num>', 'amount of veBAL that tetu controlled at the time of vote')
+program.requiredOption('-p, --proposalId <id>')
+program.requiredOption('-hh, --hiddenHandBalancerDeadline <deadline>')
+program.option('--liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
+program.parse()
+
+const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
+const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+
+// function getProvider (chain) {
+//   const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
+//   if (!urlStr) throw new Error(`no RPC provider for chain ${chain} found!`)
+//   const u = new URL(urlStr)
+//   return new ethers.providers.JsonRpcProvider({
+//     url: u.origin + u.pathname,
+//     user: u.username,
+//     password: u.password
+//   })
+// }
+
+async function getVotesByProposal (proposalId) {
+  const resp = await request(
+    SNAPSHOT_GRAPHQL_ENDPOINT,
+    gql`
+    query {
+      votes (
+        first: 1000,
+        skip: 0,
+        where: {
+          proposal: "${proposalId}"
+        }
+        orderBy: "created",
+        orderDirection: desc
+      ) {
+        id
+        voter
+        vp
+        choice
+      }
+    }
+  `
+  )
+
+  if (resp.votes >= 1000) throw new Error('too many votes! need to update code')
+
+  return resp.votes
+}
+
+async function getChoicesByProposal (proposalId) {
+  const proposalResp = await request(SNAPSHOT_GRAPHQL_ENDPOINT, gql`
+    query {
+      proposals (
+        where: {
+          id: "${proposalId}"
+        }
+      ) {
+        id
+        title
+        body
+        choices
+        start
+        end
+        snapshot
+        state
+        scores
+        scores_by_strategy
+        scores_total
+        scores_updated
+        author
+        space {
+          id
+          name
+        }
+      }
+      }
+  `)
+
+  if (proposalResp.proposals.length === 0) return []
+
+  const ret = {}
+  for (const i in proposalResp.proposals[0].choices) {
+    ret[parseInt(i, 10) + 1] = proposalResp.proposals[0].choices[i].split('(')[1].split(')')[0]
+  }
+  return ret
+}
+
+async function getHiddenHandDataByDeadline (deadline) {
+  const resp = await axios.get(`https://hhand.xyz/proposal/balancer/${deadline}`)
+  return resp.data.data
+}
+
+async function main () {
+  const liquidationPrices = {}
+  for (const val of (program.opts().liquidationPrice || [])) {
+    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
+  }
+
+  const tetuVeBAL = BigNumber(program.opts().veBAL)
+  const votes = await getVotesByProposal(program.opts().proposalId)
+  const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(program.opts().proposalId)
+  const hhData = await getHiddenHandDataByDeadline(program.opts().hiddenHandBalancerDeadline)
+
+  // gauge => { user => vp }
+  const votesByGauge = {}
+
+  // choice => total
+  const totalsByGauge = {}
+
+  // choice => % of tetu bal power
+  const percentagesOfTetuBalPowerByGauge = {}
+
+  // gauge => { user => percent }
+  const votePercentageByGauge = {}
+
+  // token => { user => amount }
+  const initialBribeTokenAmounts = {}
+
+  // token => amount
+  const initialBribeTokenTotals = {}
+
+  // user => amount
+  const usdcBribeDistributions = {}
+
+  // calculate votes
+  for (const v of votes) {
+    const weightSum = BigNumber.sum(...Object.values(v.choice))
+
+    for (const [choiceNumber, weight] of Object.entries(v.choice)) {
+      const gauge = choiceNumberToGaugeAddressPrefix[choiceNumber]
+      if (!votesByGauge[gauge]) votesByGauge[gauge] = {}
+      votesByGauge[gauge][v.voter] = BigNumber(v.vp).times(weight).div(weightSum)
+    }
+  }
+
+  // calculate totals
+  for (const [gauge, votes] of Object.entries(votesByGauge)) {
+    totalsByGauge[gauge] = BigNumber.sum(...Object.values(votes))
+  }
+
+  const totalTetuBalPower = BigNumber.sum(...Object.values(totalsByGauge))
+
+  for (const [gauge, total] of Object.entries(totalsByGauge)) {
+    percentagesOfTetuBalPowerByGauge[gauge] = total.div(totalTetuBalPower)
+  }
+
+  // calculate percentage
+  for (const [gauge, votes] of Object.entries(votesByGauge)) {
+    votePercentageByGauge[gauge] = {}
+
+    for (const [user, vp] of Object.entries(votes)) {
+      votePercentageByGauge[gauge][user] = BigNumber(vp).div(totalsByGauge[gauge])
+    }
+  }
+
+  // console.log(JSON.stringify(votePercentageByGauge, null, 2))
+
+  // console.log(JSON.stringify(hhData, null, 2))
+
+  for (const [gaugePrefix, data] of Object.entries(votePercentageByGauge)) {
+    const matchedProposals = hhData.filter(data => data.proposal.toLowerCase().includes(gaugePrefix.toLowerCase()))
+    if (matchedProposals.length > 1) throw new Error('hash collision???')
+    if (matchedProposals.length === 0) continue
+
+    for (const bribe of matchedProposals[0].bribes) {
+      if (!initialBribeTokenAmounts[bribe.symbol]) initialBribeTokenAmounts[bribe.symbol] = {}
+
+      const approxTetuVotes = tetuVeBAL.times(percentagesOfTetuBalPowerByGauge[gaugePrefix])
+      const tetuPercentageOfVote = approxTetuVotes.div(matchedProposals[0].voteCount)
+      const bribeToTetu = BigNumber(bribe.amount).times(tetuPercentageOfVote)
+
+      for (const [user, percent] of Object.entries(data)) {
+        if (!initialBribeTokenAmounts[bribe.symbol][user]) initialBribeTokenAmounts[bribe.symbol][user] = BigNumber(0)
+        initialBribeTokenAmounts[bribe.symbol][user] = initialBribeTokenAmounts[bribe.symbol][user].plus(
+          bribeToTetu.times(percent)
+        )
+      }
+    }
+  }
+
+  for (const [symbol, data] of Object.entries(initialBribeTokenAmounts)) {
+    initialBribeTokenTotals[symbol] = BigNumber.sum(...Object.values(data))
+  }
+
+  console.log('Calculated total Hidden Hand bribe amounts:')
+  console.log(JSON.stringify(initialBribeTokenTotals, null, 2))
+  console.log('Please check that these values are close to what was actually received.')
+  console.log('If not, you may need to adjust the --veBAL parameter to the program.')
+  console.log('')
+  console.log('')
+
+  for (const [symbol, data] of Object.entries(initialBribeTokenAmounts)) {
+    const liquidationPrice = symbol.toLowerCase() === 'usdc' ? BigNumber(1) : liquidationPrices[symbol.toLowerCase()]
+    if (!liquidationPrice) throw new Error(`must specify liquidation price for ${symbol}`)
+
+    for (const [user, amount] of Object.entries(data)) {
+      if (!usdcBribeDistributions[user]) usdcBribeDistributions[user] = BigNumber(0)
+      usdcBribeDistributions[user] = usdcBribeDistributions[user].plus(
+        amount.times(liquidationPrice)
+      )
+    }
+  }
+
+  const totalUsdc = BigNumber.sum(...Object.values(usdcBribeDistributions))
+
+  console.log(`Total USDC to distribute: $${totalUsdc.toFixed(2)}`)
+  console.log('Please check that this is sufficiently close to the amount that was bridged from mainnet.')
+  console.log('You may need to adjust --veBAL or --liquidationPrice parameters if not.')
+  console.log('')
+  console.log('')
+
+  const distributeTokenCalls = []
+
+  distributeTokenCalls.push([
+    USDC_ADDRESS,
+    Object.keys(usdcBribeDistributions),
+    Object.values(usdcBribeDistributions).map(bn => bn.shiftedBy(6).toFixed(0, 1)) // no decimals, round down
+  ])
+
+  console.log(distributeTokenCalls)
+}
+
+main()
