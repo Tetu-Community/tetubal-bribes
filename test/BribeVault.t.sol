@@ -7,6 +7,7 @@ import "../src/BribeVault.sol";
 
 contract BribeVaultTest is Test {
   IERC20 WMATIC = IERC20(0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270);
+  address constant TETU_COMMUNITY_DOT_ETH = 0xa69E15c6aa3667484d278F19701b2DE54aa05F9b;
   BribeVault public instance;
   BribeDistributor public distributor;
 
@@ -16,7 +17,9 @@ contract BribeVaultTest is Test {
     distributor.initialize();
 
     instance = new BribeVault();
-    instance.initialize(address(distributor), 0xC737eaB847Ae6A92028862fE38b828db41314772, 1 * 1e6);
+    instance.initialize(
+      address(distributor), 0xC737eaB847Ae6A92028862fE38b828db41314772, 1 * 1e6, 0
+    );
   }
 
   function testAccessControl() public {
@@ -134,6 +137,32 @@ contract BribeVaultTest is Test {
     distributor.distributeToken(address(WMATIC), recipients, amounts);
     uint256 gotWmaticDistribute = WMATIC.balanceOf(address(this)) - balBeforeDistribute;
     assertEq(gotWmaticDistribute, 777);
+  }
+
+  function testWithdrawBribesWithFeeBps() public {
+    instance.setFeeBps(200);
+
+    bytes32 epochId = keccak256("this is the proposal title");
+    instance.createEpoch(epochId, 1, block.timestamp + 1);
+
+    _transferWMATICFromWhale();
+
+    WMATIC.approve(address(instance), type(uint256).max);
+    instance.createBribe(epochId, address(1), address(WMATIC), 10 * 1e18);
+
+    // can't withdraw too early
+    vm.expectRevert();
+    instance.withdrawBribes(epochId);
+
+    vm.warp(block.timestamp + 10);
+    uint256 balBefore = WMATIC.balanceOf(address(distributor));
+    uint256 balBeforeTetuCommunity = WMATIC.balanceOf(TETU_COMMUNITY_DOT_ETH);
+    instance.withdrawBribes(epochId);
+    uint256 gotWmatic = WMATIC.balanceOf(address(distributor)) - balBefore;
+    uint256 gotWmaticTetuCommunity =
+      WMATIC.balanceOf(TETU_COMMUNITY_DOT_ETH) - balBeforeTetuCommunity;
+    assertEq(gotWmatic, 9800000000000000000);
+    assertEq(gotWmaticTetuCommunity, 200000000000000000);
   }
 
   function testRejectBribe() public {

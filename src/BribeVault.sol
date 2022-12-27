@@ -35,8 +35,10 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   // -- Constants --
 
   address constant USDC_ADDRESS = 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174;
+  address constant TETU_COMMUNITY_DOT_ETH = 0xa69E15c6aa3667484d278F19701b2DE54aa05F9b;
   bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
   bytes32 public constant ALLOWLIST_DEPOSITOR_ROLE = keccak256("ALLOWLIST_DEPOSITOR_ROLE");
+  uint256 constant FEE_DENOM = 1e4;
 
   // -- Storage --
 
@@ -59,6 +61,7 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   IBribeDistributor public bribeDistributor;
   ITetuLiquidator public tetuLiquidator;
   uint256 public minBribeAmountUsdc; // USDC, so 6 decimals of precision
+  uint256 public feeBps;
 
   // -- Modifiers --
 
@@ -82,13 +85,15 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
   function initialize(
     address _bribeDistributor,
     address _tetuLiquidator,
-    uint256 _minBribeAmountUsdc
+    uint256 _minBribeAmountUsdc,
+    uint256 _feeBps
   ) external initializer {
     _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     _grantRole(OPERATOR_ROLE, msg.sender);
     _setBribeDistributor(_bribeDistributor);
     _setTetuLiquidator(_tetuLiquidator);
     _setMinBribeAmountUsdc(_minBribeAmountUsdc);
+    _setFeeBps(_feeBps);
   }
 
   // -- Read functions --
@@ -217,6 +222,11 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     _setMinBribeAmountUsdc(_minBribeAmountUsdc);
   }
 
+  /// @dev Set the min bribe amount in USD with 18 decimals of precision
+  function setFeeBps(uint256 _feeBps) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    _setFeeBps(_feeBps);
+  }
+
   /// @dev Withdraw any token to msg.sender, restricted to admin only
   function rescueToken(address _token, uint256 _amount)
     external
@@ -243,6 +253,10 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
     minBribeAmountUsdc = _minBribeAmountUsdc;
   }
 
+  function _setFeeBps(uint256 _feeBps) internal {
+    feeBps = _feeBps;
+  }
+
   // transfer in a token with additional balance checks to disallow transfer tax tokens
   function _receiveBribeToken(address _token, uint256 _amount) internal {
     uint256 balanceBefore = IERC20(_token).balanceOf(address(this));
@@ -256,9 +270,13 @@ contract BribeVault is UUPSUpgradeable, AccessControl, Initializable, Reentrancy
 
   // withdraws bribe to bribe distributor
   function _withdrawBribe(bytes32 _epochId, bytes32 _bribeId) internal {
-    IERC20(bribes[_bribeId].bribeToken).safeTransfer(
-      address(bribeDistributor), bribes[_bribeId].amount
-    );
+    uint256 feeAmount = bribes[_bribeId].amount * feeBps / FEE_DENOM;
+    uint256 amountMinusFees = bribes[_bribeId].amount - feeAmount;
+
+    IERC20(bribes[_bribeId].bribeToken).safeTransfer(address(bribeDistributor), amountMinusFees);
+
+    IERC20(bribes[_bribeId].bribeToken).safeTransfer(address(TETU_COMMUNITY_DOT_ETH), feeAmount);
+
     emit BribeWithdrawn(_epochId, _bribeId, bribes[_bribeId].bribeToken, bribes[_bribeId].amount);
   }
 
