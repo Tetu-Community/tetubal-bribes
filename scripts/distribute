@@ -104,14 +104,17 @@ async function getBribesByProposal (proposalId) {
   )
 
   const res = await c.bribesByEpoch(ethers.utils.keccak256(proposalId))
+  const feeBps = await c.feeBps()
 
   const retBribes = []
 
   for (const b of res) {
+    const fee = b.amount.mul(feeBps).div(10000)
+
     retBribes.push({
       gauge: b.gauge,
       token: b.bribeToken,
-      amount: b.amount
+      amount: b.amount.sub(fee)
     })
   }
 
