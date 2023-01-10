@@ -7,6 +7,7 @@ const ethers = require('ethers')
 const BigNumber = require('bignumber.js')
 const { Command } = require('commander')
 const { request, gql } = require('graphql-request')
+const zipObject = require('lodash.zipobject')
 
 const program = new Command()
 program.description('Distribute TetuBAL bribes from the tetu-community vault')
@@ -189,7 +190,12 @@ async function main () {
   }
 
   if (program.opts().dry) {
-    console.log(distributeTokenCalls)
+    console.log(distributeTokenCalls.map((c) => {
+      return {
+        token: c[0],
+        amounts: zipObject(c[1], c[2])
+      }
+    }))
   } else {
     const provider = getProvider('polygon')
 
