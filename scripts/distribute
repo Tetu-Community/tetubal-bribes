@@ -109,7 +109,7 @@ async function getBribesByProposal (proposalId) {
   const retBribes = []
 
   for (const b of res) {
-    const fee = b.amount.mul(feeBps).div(10000)
+    const fee = b.amount.mul(feeBps).div(10000).add(1)
 
     retBribes.push({
       gauge: b.gauge,
