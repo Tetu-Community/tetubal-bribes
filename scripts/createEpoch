@@ -1,0 +1,65 @@
+#!/usr/bin/env node
+
+const delay = require('delay')
+const ms = require('ms')
+const axios = require('axios')
+const ethers = require('ethers')
+const BigNumber = require('bignumber.js')
+const { Command } = require('commander')
+
+const program = new Command()
+program.description('Create new epoch')
+program.requiredOption('-p, --proposalId <id>')
+program.requiredOption('-r, --roundNumber <id>')
+program.requiredOption('-d, --deadline <timestamp>')
+program.parse()
+
+const TETUBAL_BRIBE_VAULT_ADDRESS = '0x2dE7ab57966f7C98be4252f16350e7B185680020'
+
+function getProvider (chain) {
+  const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
+  if (!urlStr) throw new Error(`no RPC provider for chain ${chain} found!`)
+  const u = new URL(urlStr)
+  return new ethers.providers.JsonRpcProvider({
+    url: u.origin + u.pathname,
+    user: u.username,
+    password: u.password
+  })
+}
+
+async function main () {
+  const provider = getProvider('polygon')
+
+  const signer = ethers.Wallet.fromMnemonic(
+    process.env.DEPLOYER_MNEMONIC,
+    process.env.DEPLOYER_MNEMONIC_PATH || "m/44'/60'/0'/0/0"
+  ).connect(provider)
+
+  const gasResp = await axios.get('https://gpoly.blockscan.com/gasapi.ashx?apikey=key&method=gasoracle')
+  const gasPrice = BigNumber(gasResp.data.result.FastGasPrice)
+
+  console.log(`Using gas price ${gasPrice.toFixed()} gwei...`)
+  await delay(ms('3s'))
+
+  const contract = new ethers.Contract(
+    TETUBAL_BRIBE_VAULT_ADDRESS,
+    require('../abi/BribeVault.json'),
+    provider
+  )
+
+  const tx = await contract.connect(signer).createEpoch(
+    ethers.utils.keccak256(program.opts().proposalId),
+    ethers.BigNumber.from(program.opts().roundNumber),
+    ethers.BigNumber.from(program.opts().deadline),
+    {
+      gasPrice: gasPrice.shiftedBy(9).toFixed(0),
+      gasLimit: 5000000
+    }
+  )
+
+  console.log(`https://polygonscan.com/tx/${tx.hash}`)
+  await tx.wait()
+  console.log('tx mined')
+}
+
+main()
