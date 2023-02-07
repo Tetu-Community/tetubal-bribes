@@ -92,7 +92,7 @@ async function getChoicesByProposal (proposalId) {
 
   const ret = {}
   for (const i in proposalResp.proposals[0].choices) {
-    ret[parseInt(i, 10) + 1] = proposalResp.proposals[0].choices[i].split('(')[1].split(')')[0]
+    ret[parseInt(i, 10) + 1] = proposalResp.proposals[0].choices[i].match(/\((0x[A-Za-z0-9]{6})\)/)[1]
   }
   return ret
 }
