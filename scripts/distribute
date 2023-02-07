@@ -190,10 +190,14 @@ async function main () {
   }
 
   if (program.opts().dry) {
+    const iface = new ethers.utils.Interface(require('../abi/BribeDistributor.json'))
+
     console.log(distributeTokenCalls.map((c) => {
       return {
         token: c[0],
-        amounts: zipObject(c[1], c[2])
+        amounts: zipObject(c[1], c[2]),
+        to: TETUBAL_BRIBE_DISTRIBUTOR_ADDRESS,
+        calldata: iface.encodeFunctionData('distributeToken', c)
       }
     }))
   } else {
