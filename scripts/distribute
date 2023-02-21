@@ -20,6 +20,10 @@ const TETUBAL_BRIBE_VAULT_ADDRESS = '0x2dE7ab57966f7C98be4252f16350e7B185680020'
 const TETUBAL_BRIBE_DISTRIBUTOR_ADDRESS = '0x14eFd4cecC549b90409b116Bb1b6E222FCfd54F1'
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
 
+const EXCLUDED_VOTERS = [
+  '0x20D61737f972EEcB0aF5f0a85ab358Cd083Dd56a'
+]
+
 function getProvider (chain) {
   const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
   if (!urlStr) throw new Error(`no RPC provider for chain ${chain} found!`)
@@ -141,6 +145,8 @@ async function main () {
 
   // calculate votes
   for (const v of votes) {
+    if (EXCLUDED_VOTERS.find(ev => ev.toLowerCase() === v.voter.toLowerCase())) continue
+
     const weightSum = BigNumber.sum(...Object.values(v.choice))
 
     for (const [choiceNumber, weight] of Object.entries(v.choice)) {
