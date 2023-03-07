@@ -20,9 +20,7 @@ const TETUBAL_BRIBE_VAULT_ADDRESS = '0x2dE7ab57966f7C98be4252f16350e7B185680020'
 const TETUBAL_BRIBE_DISTRIBUTOR_ADDRESS = '0x14eFd4cecC549b90409b116Bb1b6E222FCfd54F1'
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
 
-const EXCLUDED_VOTERS = [
-  '0x20D61737f972EEcB0aF5f0a85ab358Cd083Dd56a'
-]
+const EXCLUDED_VOTERS = []
 
 function getProvider (chain) {
   const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
