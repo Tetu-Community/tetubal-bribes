@@ -7,14 +7,6 @@ const { request, gql } = require('graphql-request')
 const uniq = require('lodash.uniq')
 const zipObject = require('lodash.zipobject')
 
-const program = new Command()
-program.description('Calculate Warden bribe distributions')
-program.requiredOption('-p, --proposalId <id>')
-program.requiredOption('-tx, --claimTx <txHash>')
-program.option('-fp, --filterPeriod [periods...]', 'warden periods to filter on')
-program.option('-lp, --liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
-program.parse()
-
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
 const WARDEN_QUEST_BOARD_ADDRESS = '0x8b2ba835056965808aD88e7Ad7866BD57aE75839'
 const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
@@ -98,9 +90,9 @@ async function getChoicesByProposal (proposalId) {
 
 const WARDEN_MULTI_MERKLE_INTERFACE = new ethers.utils.Interface(require('../abi/warden/MultiMerkleDistributor.json'))
 
-async function main () {
+async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, silent }) {
   const provider = getProvider('mainnet')
-  const receipt = await provider.getTransactionReceipt(program.opts().claimTx)
+  const receipt = await provider.getTransactionReceipt(claimTx)
   if (!receipt) throw new Error('could not get tx receipt for claim transaction')
 
   const questBoardContract = new ethers.Contract(
@@ -109,7 +101,7 @@ async function main () {
     provider
   )
 
-  const filterPeriods = program.opts().filterPeriod || []
+  const filterPeriods = filterPeriod || []
   let claims = []
 
   for (const log of receipt.logs) {
@@ -162,12 +154,12 @@ async function main () {
   }))
 
   const liquidationPrices = {}
-  for (const val of (program.opts().liquidationPrice || [])) {
+  for (const val of (liquidationPrice || [])) {
     liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
   }
 
-  const votes = await getVotesByProposal(program.opts().proposalId)
-  const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(program.opts().proposalId)
+  const votes = await getVotesByProposal(proposalId)
+  const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(proposalId)
 
   // gauge => { user => vp }
   const votesByGauge = {}
@@ -251,19 +243,35 @@ async function main () {
 
   const totalUsdc = BigNumber.sum(...Object.values(usdcBribeDistributions))
 
-  console.log(`Total USDC to distribute: $${totalUsdc.toFixed(2)}`)
-  console.log('Please check that this is sufficiently close to the amount that was bridged from mainnet.')
-  console.log('You may need to adjust --liquidationPrice parameters if not.')
-  console.log('')
-  console.log('')
-
-  console.log({
+  const ret = {
     token: USDC_ADDRESS,
     amounts: zipObject(
       Object.keys(usdcBribeDistributions),
       Object.values(usdcBribeDistributions).map(bn => bn.toFixed(2))
     )
-  })
+  }
+
+  if (!silent) {
+    console.log(`Total USDC to distribute: $${totalUsdc.toFixed(2)}`)
+    console.log('Please check that this is sufficiently close to the amount that was bridged from mainnet.')
+    console.log('You may need to adjust --liquidationPrice parameters if not.')
+    console.log('')
+    console.log('')
+    console.log(ret)
+  }
+
+  return ret
 }
 
-main()
+if (require.main === module) {
+  const program = new Command()
+  program.description('Calculate Warden bribe distributions')
+  program.requiredOption('-p, --proposalId <id>')
+  program.requiredOption('-tx, --claimTx <txHash>')
+  program.option('-fp, --filterPeriod [periods...]', 'warden periods to filter on')
+  program.option('-lp, --liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
+  program.parse()
+  main(program.opts())
+}
+
+module.exports = main

@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+
+const distributeWarden = require('./distributeWarden')
+const BigNumber = require('bignumber.js')
+const zipObject = require('lodash.zipobject')
+
+const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+
+// TetuBAL rounds
+// Voting closed Dec 26th: 0x06f4562be6c133d755e01f6eab7a0462cb3c5ced2b65ad32abb36ca49af47a37 (dec 22, dec 29)
+// Voting closed Jan 9th: 0x16dd3c8934d08ab5b3dca6a90ea135a2a9e80a222f0334e9263407000cf2cfb4 (jan 5, jan 12)
+// Voting closed Jan 23rd: 0x1b5e8ee8e555f5efe3700d4797a4df6621925b85bbf04eb5e6379c0ca0035ef3 (jan 19, jan 26)
+// Voting closed Feb 6th: 0x3ed177443d7d9bbd255f4ee17a88fa3c670e5b1f48df0a06e79e18500b25c966 (feb 2, feb 9)
+// Voting closed Feb 20th: 0x681a54e643bccd2408d3d25320db046b28d913b947c865cbd927aa7f6ae83455  (feb 16, feb 23)
+// Voting closed March 6th: 0x7d3385edf6a38827adb4897e59646f9a0693274db7912e72b0680caf79806ed2 (march 2, march 9)
+// Voting closed March 20th: 0x550b9bc05ff51cdc41509efb0de891d4041ba7e66d569a96b6a741b73839a1f1 (march 16, march 23)
+
+// Claim
+// 1672876800 - Jan 05 2023
+// 1673481600 - Jan 12 2023
+// 1674086400 - Jan 19 2023
+// 1674691200 - Jan 26 2023
+// 1675296000 - Feb 02 2023
+// 1678320000 - Mar 09 2023
+// 1678924800 - Mar 16 2023
+// 1679529600 - Mar 23 2023
+
+const ROUND_MAP = {
+  '0x16dd3c8934d08ab5b3dca6a90ea135a2a9e80a222f0334e9263407000cf2cfb4': ['1672876800', '1673481600'], // (jan 5, jan 12)
+  '0x1b5e8ee8e555f5efe3700d4797a4df6621925b85bbf04eb5e6379c0ca0035ef3': ['1674086400', '1674691200'], // (jan 19, jan 26)
+  '0x3ed177443d7d9bbd255f4ee17a88fa3c670e5b1f48df0a06e79e18500b25c966': ['1675296000'], // (feb 2, feb 9)
+  '0x7d3385edf6a38827adb4897e59646f9a0693274db7912e72b0680caf79806ed2': ['1678320000'], // (march 2, march 9)
+  '0x550b9bc05ff51cdc41509efb0de891d4041ba7e66d569a96b6a741b73839a1f1': ['1678924800', '1679529600'] // (march 16, march 23)
+}
+
+const PRICES = [
+  'PAL=0.21',
+  'T=0.037'
+]
+
+async function main () {
+  const totalAmounts = {}
+
+  for (const [proposalId, filterPeriod] of Object.entries(ROUND_MAP)) {
+    console.log('running for proposal', proposalId)
+    const roundRes = await distributeWarden({
+      claimTx: '0x3d498b5182f6b9d62e5651e42847f9f4bd2a45da77180a63c0aa02bf3ffd9c95',
+      proposalId,
+      filterPeriod,
+      liquidationPrice: PRICES,
+      silent: true
+    })
+
+    for (const [addr, amount] of Object.entries(roundRes.amounts)) {
+      if (!totalAmounts[addr]) totalAmounts[addr] = BigNumber(0)
+      totalAmounts[addr] = totalAmounts[addr].plus(amount)
+    }
+  }
+
+  const totalUsdc = BigNumber.sum(...Object.values(totalAmounts))
+
+  console.log(`Total USDC to distribute: $${totalUsdc.toFixed(2)}`)
+  console.log('Please check that this is sufficiently close to the amount that was bridged from mainnet.')
+  console.log('You may need to adjust --liquidationPrice parameters if not.')
+  console.log('')
+  console.log('')
+
+  console.log({
+    token: USDC_ADDRESS,
+    amounts: zipObject(
+      Object.keys(totalAmounts),
+      Object.values(totalAmounts).map(bn => bn.toFixed(2))
+    )
+  }
+  )
+}
+
+main()
