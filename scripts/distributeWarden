@@ -11,6 +11,7 @@ const program = new Command()
 program.description('Calculate Warden bribe distributions')
 program.requiredOption('-p, --proposalId <id>')
 program.requiredOption('-tx, --claimTx <txHash>')
+program.option('-fp, --filterPeriod [periods...]', 'warden periods to filter on')
 program.option('-lp, --liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
 program.parse()
 
@@ -108,19 +109,29 @@ async function main () {
     provider
   )
 
-  const claims = []
+  const filterPeriods = program.opts().filterPeriod || []
+  let claims = []
 
   for (const log of receipt.logs) {
     try {
       const parsed = WARDEN_MULTI_MERKLE_INTERFACE.parseLog(log)
+
       claims.push({
         questId: parsed.args.questID,
         token: parsed.args.rewardToken,
-        amount: parsed.args.amount
+        amount: parsed.args.amount,
+        period: parsed.args.period
       })
     } catch (err) {
       // nada
     }
+  }
+
+  console.log(`found ${claims.length} claims`)
+
+  if (filterPeriods.length > 0) {
+    claims = claims.filter(c => filterPeriods.includes(c.period.toString()))
+    console.log(`found ${claims.length} claims after filtering`)
   }
 
   // add gauge to claims
