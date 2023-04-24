@@ -10,7 +10,7 @@ program.description('Calculate Hidden Hand bribe distributions')
 program.requiredOption('-ve, --veBAL <num>', 'amount of veBAL that tetu controlled at the time of vote')
 program.requiredOption('-p, --proposalId <id>')
 program.requiredOption('-hh, --hiddenHandBalancerDeadline <deadline>')
-program.option('--liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
+program.option('-lp, --liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
 program.parse()
 
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
@@ -83,7 +83,7 @@ async function getChoicesByProposal (proposalId) {
 }
 
 async function getHiddenHandDataByDeadline (deadline) {
-  const resp = await axios.get(`https://hhand.xyz/proposal/balancer/${deadline}`)
+  const resp = await axios.get(`https://api.hiddenhand.finance/proposal/balancer/${deadline}`)
   return resp.data.data
 }
 
@@ -211,6 +211,10 @@ async function main () {
   ])
 
   console.log(distributeTokenCalls)
+
+  console.log('\n\n')
+  console.log('## csv')
+  console.log(Object.entries(usdcBribeDistributions).map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`).join('\n'))
 }
 
 main()

@@ -258,6 +258,9 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     console.log('')
     console.log('')
     console.log(ret)
+    console.log('\n\n')
+    console.log('## csv')
+    console.log(Object.entries(usdcBribeDistributions).map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`).join('\n'))
   }
 
   return ret
