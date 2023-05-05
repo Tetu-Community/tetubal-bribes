@@ -229,9 +229,14 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
   console.log('')
   console.log('')
 
+  let missingPricesCount = 0
   for (const [symbol, data] of Object.entries(initialBribeTokenAmounts)) {
     const liquidationPrice = symbol.toLowerCase() === 'usdc' ? BigNumber(1) : liquidationPrices[symbol.toLowerCase()]
-    if (!liquidationPrice) throw new Error(`must specify liquidation price for ${symbol}`)
+    if (!liquidationPrice) {
+      console.error(`must specify liquidation price for ${symbol}`)
+      missingPricesCount++
+      continue
+    }
 
     for (const [user, amount] of Object.entries(data)) {
       if (!usdcBribeDistributions[user]) usdcBribeDistributions[user] = BigNumber(0)
@@ -240,6 +245,7 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
       )
     }
   }
+  if (missingPricesCount > 0) throw new Error('missing prices')
 
   const totalUsdc = BigNumber.sum(...Object.values(usdcBribeDistributions))
 
