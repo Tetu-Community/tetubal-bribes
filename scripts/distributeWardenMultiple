@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 const distributeWarden = require('./distributeWarden')
-const BigNumber = require('bignumber.js')
-const zipObject = require('lodash.zipobject')
+const BigNumber        = require('bignumber.js')
+const zipObject        = require('lodash.zipobject')
+const { parseUnits }   = require('ethers/lib/utils');
 
 const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 
@@ -73,6 +74,9 @@ async function main () {
     )
   }
   )
+
+  console.log(Object.keys(totalAmounts).join(','))
+  console.log(Object.values(totalAmounts).map(bn => parseUnits(bn.toFixed(6), 6).toString()).join(','))
 }
 
 main()

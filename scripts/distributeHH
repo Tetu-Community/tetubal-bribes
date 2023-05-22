@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
-const BigNumber = require('bignumber.js')
-const axios = require('axios')
-const { Command } = require('commander')
+const fs = require('fs');
+
+const BigNumber        = require('bignumber.js')
+const axios            = require('axios')
+const { Command }      = require('commander')
 const { request, gql } = require('graphql-request')
 
 const program = new Command()
@@ -10,70 +12,80 @@ program.description('Calculate Hidden Hand bribe distributions')
 program.requiredOption('-ve, --veBAL <num>', 'amount of veBAL that tetu controlled at the time of vote')
 program.requiredOption('-p, --proposalId <id>')
 program.requiredOption('-hh, --hiddenHandBalancerDeadline <deadline>')
-program.option('-lp, --liquidationPrice [prices...]', 'liquidation prices in USDC for tokens in the format SYMBOL=price')
+program.option(
+  '-lp, --liquidationPrice [prices...]',
+  'liquidation prices in USDC for tokens in the format SYMBOL=price',
+)
 program.parse()
 
+// scripts/distributeHH -ve 500267 -p 0x8bbcfa519547de8f5ea6e5f99b914683860a6bf6c736cd9c7b9b2aba1266b400 -hh 1684368000 --liquidationPrice AURA=1.92 RPL=49.15 BADGER=2.48 SD=0.92 LDO=2.05 GEAR=0.0059
+// https://github.com/Tetu-Community/tetu-community/blob/main/src/lib/consts.ts
+
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
-const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+const USDC_ADDRESS              = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 
 async function getVotesByProposal (proposalId) {
   const resp = await request(
     SNAPSHOT_GRAPHQL_ENDPOINT,
     gql`
-    query {
-      votes (
-        first: 1000,
-        skip: 0,
-        where: {
-          proposal: "${proposalId}"
+        query {
+            votes (
+                first: 1000,
+                skip: 0,
+                where: {
+                    proposal: "${proposalId}"
+                }
+                orderBy: "created",
+                orderDirection: desc
+            ) {
+                id
+                voter
+                vp
+                choice
+            }
         }
-        orderBy: "created",
-        orderDirection: desc
-      ) {
-        id
-        voter
-        vp
-        choice
-      }
-    }
-  `
+    `,
   )
 
-  if (resp.votes >= 1000) throw new Error('too many votes! need to update code')
+  if (resp.votes >= 1000) {
+    throw new Error('too many votes! need to update code')
+  }
 
   return resp.votes
 }
 
 async function getChoicesByProposal (proposalId) {
   const proposalResp = await request(SNAPSHOT_GRAPHQL_ENDPOINT, gql`
-    query {
-      proposals (
-        where: {
-          id: "${proposalId}"
-        }
-      ) {
-        id
-        title
-        body
-        choices
-        start
-        end
-        snapshot
-        state
-        scores
-        scores_by_strategy
-        scores_total
-        scores_updated
-        author
-        space {
-          id
-          name
-        }
-      }
+      query {
+          proposals (
+              where: {
+                  id: "${proposalId}"
+              }
+          ) {
+              id
+              title
+              body
+              choices
+              start
+              end
+              snapshot
+              state
+              scores
+              scores_by_strategy
+              scores_total
+              scores_updated
+              author
+              space {
+                  id
+                  name
+              }
+          }
       }
   `)
 
-  if (proposalResp.proposals.length === 0) return []
+  if (proposalResp.proposals.length === 0) {
+    return []
+  }
 
   const ret = {}
   for (const i in proposalResp.proposals[0].choices) {
@@ -93,10 +105,10 @@ async function main () {
     liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
   }
 
-  const tetuVeBAL = BigNumber(program.opts().veBAL)
-  const votes = await getVotesByProposal(program.opts().proposalId)
+  const tetuVeBAL                        = BigNumber(program.opts().veBAL)
+  const votes                            = await getVotesByProposal(program.opts().proposalId)
   const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(program.opts().proposalId)
-  const hhData = await getHiddenHandDataByDeadline(program.opts().hiddenHandBalancerDeadline)
+  const hhData                           = await getHiddenHandDataByDeadline(program.opts().hiddenHandBalancerDeadline)
 
   // gauge => { user => vp }
   const votesByGauge = {}
@@ -125,7 +137,9 @@ async function main () {
 
     for (const [choiceNumber, weight] of Object.entries(v.choice)) {
       const gauge = choiceNumberToGaugeAddressPrefix[choiceNumber]
-      if (!votesByGauge[gauge]) votesByGauge[gauge] = {}
+      if (!votesByGauge[gauge]) {
+        votesByGauge[gauge] = {}
+      }
       votesByGauge[gauge][v.voter] = BigNumber(v.vp).times(weight).div(weightSum)
     }
   }
@@ -152,20 +166,29 @@ async function main () {
 
   for (const [gaugePrefix, data] of Object.entries(votePercentageByGauge)) {
     const matchedProposals = hhData.filter(data => data.proposal.toLowerCase().includes(gaugePrefix.toLowerCase()))
-    if (matchedProposals.length > 1) throw new Error('hash collision???')
-    if (matchedProposals.length === 0) continue
+    if (matchedProposals.length > 1) {
+      throw new Error('hash collision???')
+    }
+    if (matchedProposals.length === 0) {
+      console.log('Gauge not reflected in proposal', gaugePrefix.toLowerCase())
+      continue
+    }
 
     for (const bribe of matchedProposals[0].bribes) {
-      if (!initialBribeTokenAmounts[bribe.symbol]) initialBribeTokenAmounts[bribe.symbol] = {}
+      if (!initialBribeTokenAmounts[bribe.symbol]) {
+        initialBribeTokenAmounts[bribe.symbol] = {}
+      }
 
-      const approxTetuVotes = tetuVeBAL.times(percentagesOfTetuBalPowerByGauge[gaugePrefix])
+      const approxTetuVotes      = tetuVeBAL.times(percentagesOfTetuBalPowerByGauge[gaugePrefix])
       const tetuPercentageOfVote = approxTetuVotes.div(matchedProposals[0].voteCount)
-      const bribeToTetu = BigNumber(bribe.amount).times(tetuPercentageOfVote)
+      const bribeToTetu          = BigNumber(bribe.amount).times(tetuPercentageOfVote)
 
       for (const [user, percent] of Object.entries(data)) {
-        if (!initialBribeTokenAmounts[bribe.symbol][user]) initialBribeTokenAmounts[bribe.symbol][user] = BigNumber(0)
+        if (!initialBribeTokenAmounts[bribe.symbol][user]) {
+          initialBribeTokenAmounts[bribe.symbol][user] = BigNumber(0)
+        }
         initialBribeTokenAmounts[bribe.symbol][user] = initialBribeTokenAmounts[bribe.symbol][user].plus(
-          bribeToTetu.times(percent)
+          bribeToTetu.times(percent),
         )
       }
     }
@@ -192,13 +215,17 @@ async function main () {
     }
 
     for (const [user, amount] of Object.entries(data)) {
-      if (!usdcBribeDistributions[user]) usdcBribeDistributions[user] = BigNumber(0)
+      if (!usdcBribeDistributions[user]) {
+        usdcBribeDistributions[user] = BigNumber(0)
+      }
       usdcBribeDistributions[user] = usdcBribeDistributions[user].plus(
-        amount.times(liquidationPrice)
+        amount.times(liquidationPrice),
       )
     }
   }
-  if (missingPricesCount > 0) throw new Error('missing prices')
+  if (missingPricesCount > 0) {
+    throw new Error('missing prices')
+  }
 
   const totalUsdc = BigNumber.sum(...Object.values(usdcBribeDistributions))
 
@@ -213,14 +240,41 @@ async function main () {
   distributeTokenCalls.push([
     USDC_ADDRESS,
     Object.keys(usdcBribeDistributions),
-    Object.values(usdcBribeDistributions).map(bn => bn.shiftedBy(6).toFixed(0, 1)) // no decimals, round down
+    Object.values(usdcBribeDistributions).map(bn => bn.shiftedBy(6).toFixed(0, 1)), // no decimals, round down
   ])
 
-  console.log(distributeTokenCalls)
+  console.log('USDC_ADDRESS', USDC_ADDRESS)
 
-  console.log('\n\n')
-  console.log('## csv')
-  console.log(Object.entries(usdcBribeDistributions).map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`).join('\n'))
+  let recipients = '[';
+  for (const adr of Object.keys(usdcBribeDistributions)) {
+    recipients += ('' + adr + ',')
+    //recipients += ('"' + adr + '",')
+  }
+  recipients = recipients.slice(0, recipients.length - 1)
+  recipients += (']')
+  //console.log(recipients);
+
+  let amounts = '[';
+  for (const amount of Object.values(usdcBribeDistributions).map(bn => bn.shiftedBy(6).toFixed(0, 1))) {
+    amounts += (amount + ',')
+  }
+  amounts = amounts.slice(0, amounts.length - 1)
+  amounts += (']')
+  //console.log(amounts);
+
+  fs.mkdirSync('./tmp/hh', { recursive: true });
+  fs.writeFileSync('./tmp/hh/' + `${program.opts().hiddenHandBalancerDeadline}_dist.txt`, recipients + '\n' + amounts);
+
+  //console.log(distributeTokenCalls)
+  fs.writeFileSync(
+    './tmp/hh/' + `${program.opts().hiddenHandBalancerDeadline}.csv`,
+    Object.entries(usdcBribeDistributions)
+      .map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`)
+      .join('\n'),
+  );
 }
 
 main()
+
+
+
