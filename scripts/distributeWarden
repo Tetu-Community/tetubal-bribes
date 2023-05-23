@@ -103,15 +103,16 @@ async function getChoicesByProposal (proposalId) {
 
 const WARDEN_MULTI_MERKLE_INTERFACE = new ethers.utils.Interface(require('../abi/warden/MultiMerkleDistributor.json'))
 
-async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, silent }) {
+async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, silent, questBoard }) {
   const provider = getProvider('mainnet')
   const receipt  = await provider.getTransactionReceipt(claimTx)
   if (!receipt) {
     throw new Error('could not get tx receipt for claim transaction')
   }
 
+  const qbaddress = questBoard ? questBoard : WARDEN_QUEST_BOARD_ADDRESS
   const questBoardContract = new ethers.Contract(
-    WARDEN_QUEST_BOARD_ADDRESS,
+    qbaddress,
     require('../abi/warden/QuestBoard.json'),
     provider,
   )
@@ -148,6 +149,9 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     for (const claim of claims) {
       if (claim.questId === questId) {
         claim.gauge = res.gauge
+        if(claim.token != res.rewardToken || claim.period != res.periodStart){
+          throw new Error("rewardToken mismatch for quest")
+        }
       }
     }
   }))
@@ -345,6 +349,7 @@ if (require.main === module) {
     '-lp, --liquidationPrice [prices...]',
     'liquidation prices in USDC for tokens in the format SYMBOL=price'
   )
+  program.option('-qb, --questBoard <address>', 'contract address for questboard')
   program.parse()
   main(program.opts())
 }
