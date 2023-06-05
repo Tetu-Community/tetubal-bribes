@@ -1,0 +1,139 @@
+#!/usr/bin/env node
+const BigNumber = require('bignumber.js')
+const { Command } = require('commander')
+const { request, gql } = require('graphql-request')
+
+const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
+
+const SPACES = [
+  { id: 'tetubal.eth', weight: 50 },
+  { id: 'tetu.eth', weight: 50 }
+]
+
+async function getVotesByProposal (proposalId) {
+  const resp = await request(
+    SNAPSHOT_GRAPHQL_ENDPOINT,
+    gql`
+        query {
+            votes (
+                first: 1000,
+                skip: 0,
+                where: {
+                    proposal: "${proposalId}"
+                }
+                orderBy: "created",
+                orderDirection: desc
+            ) {
+                id
+                voter
+                vp
+                choice
+            }
+        }
+    `
+  )
+
+  if (resp.votes >= 1000) {
+    throw new Error('too many votes! need to update code')
+  }
+
+  return resp.votes
+}
+
+async function getProposalsBySpace (spaceId, startGt) {
+  const resp = await request(
+    SNAPSHOT_GRAPHQL_ENDPOINT,
+    gql`
+        query {
+            proposals (
+                first: 1000,
+                skip: 0,
+                where: {
+                    space: "${spaceId}"
+                    start_gt: ${startGt}
+                }
+                orderBy: "created",
+                orderDirection: desc
+            ) {
+                id
+            }
+        }
+    `
+  )
+
+  if (resp.proposals >= 1000) {
+    throw new Error('too many proposals! need to update code')
+  }
+
+  return resp.proposals
+}
+
+async function main ({ days }) {
+  const startTs = Math.floor(Date.now() / 1000) - parseInt(days, 10) * 86400
+
+  const proposals = []
+
+  for (const space of SPACES) {
+    for (const proposal of await getProposalsBySpace(space.id, startTs)) {
+      proposals.push({
+        spaceId: space.id,
+        id: proposal.id
+      })
+    }
+  }
+
+  const votesBySpace = {}
+
+  for (const proposal of proposals) {
+    const votes = await getVotesByProposal(proposal.id)
+    if (!votesBySpace[proposal.spaceId]) votesBySpace[proposal.spaceId] = {}
+    for (const v of votes) {
+      votesBySpace[proposal.spaceId][v.voter] = BigNumber.sum(votesBySpace[proposal.spaceId][v.voter] || 0, v.vp)
+    }
+  }
+
+  const percentageVotesBySpace = {}
+
+  for (const [space, votes] of Object.entries(votesBySpace)) {
+    percentageVotesBySpace[space] = {}
+    const total = BigNumber.sum(...Object.values(votes))
+    for (const [voter, vp] of Object.entries(votes)) {
+      percentageVotesBySpace[space][voter] = vp.div(total).times(100)
+    }
+  }
+
+  const res = {}
+
+  for (const [space, percentageVotes] of Object.entries(percentageVotesBySpace)) {
+    for (const [voter, percent] of Object.entries(percentageVotes)) {
+      res[voter] = BigNumber.sum(res[voter] || 0, percent.times(SPACES.find(s => s.id === space).weight))
+    }
+  }
+
+  const resArr = []
+  for (const [voter, score] of Object.entries(res)) {
+    resArr.push({
+      voter,
+      score: score.toFixed()
+    })
+  }
+
+  resArr.sort((a, b) => BigNumber(a.score).gt(b.score) ? -1 : 1)
+
+  console.table(resArr)
+
+  console.log('csv')
+  console.log('')
+  console.log('voter,score')
+  console.log(resArr.map(r => `${r.voter},${r.score}`).join('\n'))
+}
+
+if (require.main === module) {
+  const program = new Command()
+  program.description('Get list of veTETU, dxTETU, and tetuBAL voting addresses')
+  program.requiredOption('-d, --days <number>', 'number of days in the past to consider')
+  program.parse()
+  main(program.opts())
+}
+
+module.exports = main
