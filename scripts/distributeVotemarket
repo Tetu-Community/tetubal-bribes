@@ -1,0 +1,352 @@
+#!/usr/bin/env node
+require('dotenv').config()
+const fs = require('fs')
+
+const ethers = require('ethers')
+const BigNumber = require('bignumber.js')
+const { Command } = require('commander')
+const { request, gql } = require('graphql-request')
+const uniq = require('lodash.uniq')
+const zipObject = require('lodash.zipobject')
+
+const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
+const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+const VOTEMARKET_PLATFORM_ADDRESS = '0x00000008eF298e2B6dc47E88D72eeB1Fc2b1CA7f'
+
+// EXAMPLE USAGE
+// scripts/distributeWarden -p 0x8bbcfa519547de8f5ea6e5f99b914683860a6bf6c736cd9c7b9b2aba1266b400 -tx 0x6445f349fcfb51c0f67601cfb133092b6ea63f62e7888a48a3ef43d3993a62c9 -lp PAL=.21 LQTY=1.25 USDC=1 USH=0.32
+// https://github.com/Tetu-Community/tetu-community/blob/main/src/lib/consts.ts
+
+function getProvider (chain) {
+  const urlStr = process.env[`${chain.toUpperCase()}_RPC_HTTP`]
+  if (!urlStr) {
+    throw new Error(`no RPC provider for chain ${chain} found! ${chain.toUpperCase()}_RPC_HTTP`)
+  }
+  const u = new URL(urlStr)
+  return new ethers.providers.JsonRpcProvider({
+    url: u.origin + u.pathname,
+    user: u.username,
+    password: u.password
+  })
+}
+
+async function getVotesByProposal (proposalId) {
+  const resp = await request(
+    SNAPSHOT_GRAPHQL_ENDPOINT,
+    gql`
+        query {
+            votes (
+                first: 1000,
+                skip: 0,
+                where: {
+                    proposal: "${proposalId}"
+                }
+                orderBy: "created",
+                orderDirection: desc
+            ) {
+                id
+                voter
+                vp
+                choice
+            }
+        }
+    `
+  )
+
+  if (resp.votes >= 1000) {
+    throw new Error('too many votes! need to update code')
+  }
+
+  return resp.votes
+}
+
+async function getChoicesByProposal (proposalId) {
+  const proposalResp = await request(SNAPSHOT_GRAPHQL_ENDPOINT, gql`
+      query {
+          proposals (
+              where: {
+                  id: "${proposalId}"
+              }
+          ) {
+              id
+              title
+              body
+              choices
+              start
+              end
+              snapshot
+              state
+              scores
+              scores_by_strategy
+              scores_total
+              scores_updated
+              author
+              space {
+                  id
+                  name
+              }
+          }
+      }
+  `)
+
+  if (proposalResp.proposals.length === 0) {
+    return []
+  }
+
+  const ret = {}
+  for (const i in proposalResp.proposals[0].choices) {
+    ret[parseInt(i, 10) + 1] = proposalResp.proposals[0].choices[i].split('(')[1].split(')')[0]
+  }
+  return ret
+}
+
+async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, silent }) {
+  const provider = getProvider('mainnet')
+  const receipt = await provider.getTransactionReceipt(claimTx)
+  if (!receipt) {
+    throw new Error('could not get tx receipt for claim transaction')
+  }
+
+  const platformContract = new ethers.Contract(
+    VOTEMARKET_PLATFORM_ADDRESS,
+    require('../abi/votemarket/Platform.json'),
+    provider
+  )
+
+  const filterPeriods = filterPeriod || []
+  let claims = []
+
+  for (const log of receipt.logs) {
+    if (log.address !== platformContract.address) continue
+    const parsed = platformContract.interface.parseLog(log)
+    if (parsed.name !== 'Claimed') continue
+
+    claims.push({
+      bountyId: parsed.args.bountyId,
+      token: parsed.args.rewardToken,
+      amount: parsed.args.amount,
+      period: parsed.args.period
+    })
+  }
+
+  console.log(`found ${claims.length} claims`)
+
+  if (filterPeriods.length > 0) {
+    claims = claims.filter(c => filterPeriods.includes(c.period.toString()))
+    console.log(`found ${claims.length} claims after filtering`)
+  }
+
+  // add gauge to claims
+  const bountyIds = uniq(claims.map(c => c.bountyId))
+  await Promise.all(bountyIds.map(async function (bountyId) {
+    const res = await platformContract.bounties(bountyId)
+    for (const claim of claims) {
+      if (claim.bountyId === bountyId) {
+        claim.gauge = res.gauge
+        if (claim.token !== res.rewardToken) throw new Error('rewardToken mismatch for quest')
+      }
+    }
+  }))
+
+  // add token symbol to claims
+  const tokenAddresses = uniq(claims.map(c => c.token))
+  await Promise.all(tokenAddresses.map(async function (tokenAddress) {
+    const tokenContract = new ethers.Contract(
+      tokenAddress,
+      require('../abi/ERC20.json'),
+      provider
+    )
+    const symbol = await tokenContract.symbol()
+    const decimals = await tokenContract.decimals()
+    for (const claim of claims) {
+      if (claim.token === tokenAddress) {
+        claim.tokenSymbol = symbol
+        claim.tokenDecimals = decimals
+      }
+    }
+  }))
+
+  const liquidationPrices = {}
+  for (const val of (liquidationPrice || [])) {
+    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
+  }
+
+  const votes = await getVotesByProposal(proposalId)
+  const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(proposalId)
+
+  // gauge => { user => vp }
+  const votesByGauge = {}
+
+  // choice => total
+  const totalsByGauge = {}
+
+  // gauge => { user => percent }
+  const votePercentageByGauge = {}
+
+  // token => { user => amount }
+  const initialBribeTokenAmounts = {}
+
+  // token => amount
+  const initialBribeTokenTotals = {}
+
+  // user => amount
+  const usdcBribeDistributions = {}
+
+  // calculate votes
+  for (const v of votes) {
+    const weightSum = BigNumber.sum(...Object.values(v.choice))
+
+    for (const [choiceNumber, weight] of Object.entries(v.choice)) {
+      const gauge = choiceNumberToGaugeAddressPrefix[choiceNumber]
+      if (!votesByGauge[gauge]) {
+        votesByGauge[gauge] = {}
+      }
+      votesByGauge[gauge][v.voter] = BigNumber(v.vp).times(weight).div(weightSum)
+    }
+  }
+
+  // calculate totals
+  for (const [gauge, votes] of Object.entries(votesByGauge)) {
+    totalsByGauge[gauge] = BigNumber.sum(...Object.values(votes))
+  }
+
+  // calculate percentage
+  for (const [gauge, votes] of Object.entries(votesByGauge)) {
+    votePercentageByGauge[gauge] = {}
+
+    for (const [user, vp] of Object.entries(votes)) {
+      votePercentageByGauge[gauge][user] = BigNumber(vp).div(totalsByGauge[gauge])
+    }
+  }
+
+  for (const claim of claims) {
+    for (const [gaugePrefix, votePercentages] of Object.entries(votePercentageByGauge)) {
+      // only match correct gauge
+      if (!claim.gauge.toLowerCase().includes(gaugePrefix.toLowerCase())) {
+        continue
+      }
+
+      if (!initialBribeTokenAmounts[claim.tokenSymbol]) {
+        initialBribeTokenAmounts[claim.tokenSymbol] = {}
+      }
+
+      for (const [user, percent] of Object.entries(votePercentages)) {
+        if (!initialBribeTokenAmounts[claim.tokenSymbol][user]) {
+          initialBribeTokenAmounts[claim.tokenSymbol][user] = BigNumber(
+            0)
+        }
+        initialBribeTokenAmounts[claim.tokenSymbol][user] = initialBribeTokenAmounts[claim.tokenSymbol][user].plus(
+          BigNumber(claim.amount.toString()).shiftedBy(0 - claim.tokenDecimals).times(percent)
+        )
+      }
+    }
+  }
+
+  for (const [symbol, data] of Object.entries(initialBribeTokenAmounts)) {
+    initialBribeTokenTotals[symbol] = BigNumber.sum(...Object.values(data))
+  }
+
+  console.log('Found Votemarket claims:')
+  console.log(JSON.stringify(initialBribeTokenTotals, null, 2))
+  console.log('')
+  console.log('')
+
+  let missingPricesCount = 0
+  for (const [symbol, data] of Object.entries(initialBribeTokenAmounts)) {
+    const liquidationPrice = symbol.toLowerCase() === 'usdc' ? BigNumber(1) : liquidationPrices[symbol.toLowerCase()]
+    if (!liquidationPrice) {
+      console.error(`must specify liquidation price for ${symbol}`)
+      missingPricesCount++
+      continue
+    }
+
+    for (const [user, amount] of Object.entries(data)) {
+      if (!usdcBribeDistributions[user]) {
+        usdcBribeDistributions[user] = BigNumber(0)
+      }
+      usdcBribeDistributions[user] = usdcBribeDistributions[user].plus(
+        amount.times(liquidationPrice)
+      )
+    }
+  }
+  if (missingPricesCount > 0) {
+    throw new Error('missing prices')
+  }
+
+  const totalUsdc = BigNumber.sum(...Object.values(usdcBribeDistributions))
+
+  const ret = {
+    token: USDC_ADDRESS,
+    amounts: zipObject(
+      Object.keys(usdcBribeDistributions),
+      Object.values(usdcBribeDistributions).map(bn => bn.toFixed(2))
+    )
+  }
+
+  if (!silent) {
+    console.log(`Total USDC to distribute: $${totalUsdc.toFixed(2)}`)
+    console.log('Please check that this is sufficiently close to the amount that was bridged from mainnet.')
+    console.log('You may need to adjust --liquidationPrice parameters if not.')
+    console.log('')
+    console.log('')
+    console.log(ret)
+    // console.log('\n\n')
+    // console.log('## csv')
+    // console.log(Object.entries(usdcBribeDistributions).map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`).join('\n'))
+
+    const fileId = (Date.now() / 1000 / 60 / 60 / 24).toFixed()
+    fs.mkdirSync('./tmp/warden', { recursive: true })
+    fs.writeFileSync(
+      `./tmp/warden/${fileId}.csv`,
+      Object.entries(usdcBribeDistributions)
+        .map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`)
+        .join('\n')
+    )
+
+    console.log('USDC_ADDRESS', USDC_ADDRESS)
+
+    let recipients = '['
+    for (const adr of Object.keys(usdcBribeDistributions)) {
+      recipients += ('' + adr + ',')
+      // recipients += ('"' + adr + '",')
+    }
+    recipients = recipients.slice(0, recipients.length - 1)
+    recipients += (']')
+    console.log(recipients)
+
+    let amounts = '['
+    for (const amount of Object.values(usdcBribeDistributions).map(bn => bn.shiftedBy(6).toFixed(0, 1))) {
+      amounts += (amount + ',')
+    }
+    amounts = amounts.slice(0, amounts.length - 1)
+    amounts += (']')
+    console.log(amounts)
+
+    if (!fs.existsSync('./tmp/votemarket')) {
+      fs.mkdirSync('./tmp/votemarket/')
+    }
+
+    fs.writeFileSync(
+      `./tmp/votemarket/${fileId}_dist.txt`,
+      recipients + '\n' + amounts
+    )
+  }
+
+  return ret
+}
+
+if (require.main === module) {
+  const program = new Command()
+  program.description('Calculate Votemarket distributions')
+  program.requiredOption('-p, --proposalId <id>')
+  program.requiredOption('-tx, --claimTx <txHash>')
+  program.option('-fp, --filterPeriod [periods...]', 'votemarket periods to filter on')
+  program.option(
+    '-lp, --liquidationPrice [prices...]',
+    'liquidation prices in USDC for tokens in the format SYMBOL=price'
+  )
+  program.parse()
+  main(program.opts())
+}
+
+module.exports = main
