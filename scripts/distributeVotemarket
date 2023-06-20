@@ -2,19 +2,20 @@
 require('dotenv').config()
 const fs = require('fs')
 
-const ethers = require('ethers')
-const BigNumber = require('bignumber.js')
-const { Command } = require('commander')
+const ethers           = require('ethers')
+const BigNumber        = require('bignumber.js')
+const { Command }      = require('commander')
 const { request, gql } = require('graphql-request')
-const uniq = require('lodash.uniq')
-const zipObject = require('lodash.zipobject')
+const uniq             = require('lodash.uniq')
+const zipObject        = require('lodash.zipobject')
 
-const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
-const USDC_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+const SNAPSHOT_GRAPHQL_ENDPOINT   = 'https://hub.snapshot.org/graphql'
+const USDC_ADDRESS                = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 const VOTEMARKET_PLATFORM_ADDRESS = '0x00000008eF298e2B6dc47E88D72eeB1Fc2b1CA7f'
 
 // EXAMPLE USAGE
-// scripts/distributeWarden -p 0x8bbcfa519547de8f5ea6e5f99b914683860a6bf6c736cd9c7b9b2aba1266b400 -tx 0x6445f349fcfb51c0f67601cfb133092b6ea63f62e7888a48a3ef43d3993a62c9 -lp PAL=.21 LQTY=1.25 USDC=1 USH=0.32
+// scripts/distributeVotemarket -p 0x7e0a1851b24e9d39f4600125b5c04bfad02873dc7fa6398c493bb6e33e51d96f -tx 0x9a0ab1bd57d0838adf3bebb0ef6cb817a66c2bfcda21abec3b3a2e11c158b08f -lp SDT=0.37 -lp Silo=0.07 -lp BAL=4.38 swETH=1762 ANKR=0.02
+// scripts/distributeVotemarket -p 0x274f13b610d1355058b5a5e279f6fa057c904531c6d481afe264d5c17baaffed -tx 0xdd58d3522456d1494bb92b3bc336df99197dcf52ccf7ca378b6b41d54eff16a4 -lp SDT=0.37 -lp Silo=0.07 -lp BAL=4.38 swETH=1762 ANKR=0.02
 // https://github.com/Tetu-Community/tetu-community/blob/main/src/lib/consts.ts
 
 function getProvider (chain) {
@@ -26,7 +27,7 @@ function getProvider (chain) {
   return new ethers.providers.JsonRpcProvider({
     url: u.origin + u.pathname,
     user: u.username,
-    password: u.password
+    password: u.password,
   })
 }
 
@@ -50,7 +51,7 @@ async function getVotesByProposal (proposalId) {
                 choice
             }
         }
-    `
+    `,
   )
 
   if (resp.votes >= 1000) {
@@ -102,7 +103,7 @@ async function getChoicesByProposal (proposalId) {
 
 async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, silent }) {
   const provider = getProvider('mainnet')
-  const receipt = await provider.getTransactionReceipt(claimTx)
+  const receipt  = await provider.getTransactionReceipt(claimTx)
   if (!receipt) {
     throw new Error('could not get tx receipt for claim transaction')
   }
@@ -110,22 +111,26 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
   const platformContract = new ethers.Contract(
     VOTEMARKET_PLATFORM_ADDRESS,
     require('../abi/votemarket/Platform.json'),
-    provider
+    provider,
   )
 
   const filterPeriods = filterPeriod || []
-  let claims = []
+  let claims          = []
 
   for (const log of receipt.logs) {
-    if (log.address !== platformContract.address) continue
+    if (log.address !== platformContract.address) {
+      continue
+    }
     const parsed = platformContract.interface.parseLog(log)
-    if (parsed.name !== 'Claimed') continue
+    if (parsed.name !== 'Claimed') {
+      continue
+    }
 
     claims.push({
       bountyId: parsed.args.bountyId,
       token: parsed.args.rewardToken,
       amount: parsed.args.amount,
-      period: parsed.args.period
+      period: parsed.args.period,
     })
   }
 
@@ -143,7 +148,9 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     for (const claim of claims) {
       if (claim.bountyId === bountyId) {
         claim.gauge = res.gauge
-        if (claim.token !== res.rewardToken) throw new Error('rewardToken mismatch for quest')
+        if (claim.token !== res.rewardToken) {
+          throw new Error('rewardToken mismatch for quest')
+        }
       }
     }
   }))
@@ -154,13 +161,13 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     const tokenContract = new ethers.Contract(
       tokenAddress,
       require('../abi/ERC20.json'),
-      provider
+      provider,
     )
-    const symbol = await tokenContract.symbol()
-    const decimals = await tokenContract.decimals()
+    const symbol        = await tokenContract.symbol()
+    const decimals      = await tokenContract.decimals()
     for (const claim of claims) {
       if (claim.token === tokenAddress) {
-        claim.tokenSymbol = symbol
+        claim.tokenSymbol   = symbol
         claim.tokenDecimals = decimals
       }
     }
@@ -168,10 +175,11 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
 
   const liquidationPrices = {}
   for (const val of (liquidationPrice || [])) {
-    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
+    // reduce on 5% perf fee
+    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(Number(val.split('=')[1]) * 0.95)
   }
 
-  const votes = await getVotesByProposal(proposalId)
+  const votes                            = await getVotesByProposal(proposalId)
   const choiceNumberToGaugeAddressPrefix = await getChoicesByProposal(proposalId)
 
   // gauge => { user => vp }
@@ -236,7 +244,7 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
             0)
         }
         initialBribeTokenAmounts[claim.tokenSymbol][user] = initialBribeTokenAmounts[claim.tokenSymbol][user].plus(
-          BigNumber(claim.amount.toString()).shiftedBy(0 - claim.tokenDecimals).times(percent)
+          BigNumber(claim.amount.toString()).shiftedBy(0 - claim.tokenDecimals).times(percent),
         )
       }
     }
@@ -265,7 +273,7 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
         usdcBribeDistributions[user] = BigNumber(0)
       }
       usdcBribeDistributions[user] = usdcBribeDistributions[user].plus(
-        amount.times(liquidationPrice)
+        amount.times(liquidationPrice),
       )
     }
   }
@@ -279,8 +287,8 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     token: USDC_ADDRESS,
     amounts: zipObject(
       Object.keys(usdcBribeDistributions),
-      Object.values(usdcBribeDistributions).map(bn => bn.toFixed(2))
-    )
+      Object.values(usdcBribeDistributions).map(bn => bn.toFixed(2)),
+    ),
   }
 
   if (!silent) {
@@ -300,7 +308,7 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
       `./tmp/warden/${fileId}.csv`,
       Object.entries(usdcBribeDistributions)
         .map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`)
-        .join('\n')
+        .join('\n'),
     )
 
     console.log('USDC_ADDRESS', USDC_ADDRESS)
@@ -328,8 +336,15 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
 
     fs.writeFileSync(
       `./tmp/votemarket/${fileId}_dist.txt`,
-      recipients + '\n' + amounts
+      recipients + '\n' + amounts,
     )
+
+    fs.writeFileSync(
+      './tmp/votemarket/' + `${fileId}_dist.csv`,
+      Object.entries(usdcBribeDistributions)
+        .map(([user, amount]) => `erc20,${USDC_ADDRESS},${user},${amount.toFixed(6, 1)},`)
+        .join('\n'),
+    );
   }
 
   return ret
@@ -343,7 +358,7 @@ if (require.main === module) {
   program.option('-fp, --filterPeriod [periods...]', 'votemarket periods to filter on')
   program.option(
     '-lp, --liquidationPrice [prices...]',
-    'liquidation prices in USDC for tokens in the format SYMBOL=price'
+    'liquidation prices in USDC for tokens in the format SYMBOL=price',
   )
   program.parse()
   main(program.opts())

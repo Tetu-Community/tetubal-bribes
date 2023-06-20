@@ -18,7 +18,7 @@ program.option(
 )
 program.parse()
 
-// scripts/distributeHH -ve 500267 -p 0x8bbcfa519547de8f5ea6e5f99b914683860a6bf6c736cd9c7b9b2aba1266b400 -hh 1684368000 --liquidationPrice AURA=1.92 RPL=49.15 BADGER=2.48 SD=0.92 LDO=2.05 GEAR=0.0059
+// scripts/distributeHH -ve 500267 -p 0x7e0a1851b24e9d39f4600125b5c04bfad02873dc7fa6398c493bb6e33e51d96f -hh 1686787200 --liquidationPrice RPL=40.37 BADGER=2.05
 // https://github.com/Tetu-Community/tetu-community/blob/main/src/lib/consts.ts
 
 const SNAPSHOT_GRAPHQL_ENDPOINT = 'https://hub.snapshot.org/graphql'
@@ -102,7 +102,8 @@ async function getHiddenHandDataByDeadline (deadline) {
 async function main () {
   const liquidationPrices = {}
   for (const val of (program.opts().liquidationPrice || [])) {
-    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
+    // reduce on 5% perf fee
+    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(Number(val.split('=')[1]) * 0.95)
   }
 
   const tetuVeBAL                        = BigNumber(program.opts().veBAL)

@@ -10,12 +10,14 @@ const uniq             = require('lodash.uniq')
 const zipObject        = require('lodash.zipobject')
 const { parseUnits }   = require('ethers/lib/utils');
 
-const SNAPSHOT_GRAPHQL_ENDPOINT  = 'https://hub.snapshot.org/graphql'
-const WARDEN_QUEST_BOARD_ADDRESS = '0x8b2ba835056965808aD88e7Ad7866BD57aE75839'
-const USDC_ADDRESS               = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
+const SNAPSHOT_GRAPHQL_ENDPOINT   = 'https://hub.snapshot.org/graphql'
+const WARDEN_QUEST_BOARD_ADDRESS  = '0x8b2ba835056965808aD88e7Ad7866BD57aE75839'
+const WARDEN_QUEST_BOARD_ADDRESS2 = '0x609FB23b9EA7CB3eDaF56DB5dAF07C8E94C155De'
+const USDC_ADDRESS                = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 
 // EXAMPLE USAGE
-// scripts/distributeWarden -p 0x8bbcfa519547de8f5ea6e5f99b914683860a6bf6c736cd9c7b9b2aba1266b400 -tx 0x6445f349fcfb51c0f67601cfb133092b6ea63f62e7888a48a3ef43d3993a62c9 -lp PAL=.21 LQTY=1.25 USDC=1 USH=0.32
+// scripts/distributeWarden -p 0x7e0a1851b24e9d39f4600125b5c04bfad02873dc7fa6398c493bb6e33e51d96f -tx 0x791e9bdb9cb01a1b9cf2e2076b848e75374fc4da94c2cff0bb2761cd8fd9901b -qb 0x609FB23b9EA7CB3eDaF56DB5dAF07C8E94C155De -lp PAL=.17 LQTY=1.25 USDC=1 USH=0.32 T=0.026
+// scripts/distributeWarden -p 0x274f13b610d1355058b5a5e279f6fa057c904531c6d481afe264d5c17baaffed -tx 0x791e9bdb9cb01a1b9cf2e2076b848e75374fc4da94c2cff0bb2761cd8fd9901b -lp PAL=.17 USDC=1 T=0.018
 // https://github.com/Tetu-Community/tetu-community/blob/main/src/lib/consts.ts
 
 function getProvider (chain) {
@@ -110,7 +112,7 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     throw new Error('could not get tx receipt for claim transaction')
   }
 
-  const qbaddress = questBoard ? questBoard : WARDEN_QUEST_BOARD_ADDRESS
+  const qbaddress          = questBoard ? questBoard : WARDEN_QUEST_BOARD_ADDRESS
   const questBoardContract = new ethers.Contract(
     qbaddress,
     require('../abi/warden/QuestBoard.json'),
@@ -123,6 +125,13 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
   for (const log of receipt.logs) {
     try {
       const parsed = WARDEN_MULTI_MERKLE_INTERFACE.parseLog(log)
+
+      console.log("parsed quest", {
+        questId: parsed.args.questID.toString(),
+        token: parsed.args.rewardToken,
+        amount: parsed.args.amount.toString(),
+        period: parsed.args.period.toString(),
+      })
 
       claims.push({
         questId: parsed.args.questID,
@@ -149,7 +158,16 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
     for (const claim of claims) {
       if (claim.questId === questId) {
         claim.gauge = res.gauge
-        if(claim.token != res.rewardToken || claim.period != res.periodStart){
+        if (claim.token != res.rewardToken
+          || claim.period != res.periodStart
+        ) {
+          console.log("!!! >>> data mismatch for questId", questId.toString())
+          console.log("amount", claim.amount.toString())
+          console.log("claim.token", claim.token)
+          console.log("rewardToken from the board", res.rewardToken)
+          console.log("claim.period", claim.period.toNumber())
+          console.log("periodStart from the board", res.periodStart)
+
           throw new Error("rewardToken mismatch for quest")
         }
       }
@@ -176,7 +194,8 @@ async function main ({ claimTx, filterPeriod, liquidationPrice, proposalId, sile
 
   const liquidationPrices = {}
   for (const val of (liquidationPrice || [])) {
-    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(val.split('=')[1])
+    // remove 5% for count perf fee
+    liquidationPrices[val.split('=')[0].toLowerCase()] = BigNumber(Number(val.split('=')[1]) * 0.95)
   }
 
   const votes                            = await getVotesByProposal(proposalId)
@@ -347,7 +366,7 @@ if (require.main === module) {
   program.option('-fp, --filterPeriod [periods...]', 'warden periods to filter on')
   program.option(
     '-lp, --liquidationPrice [prices...]',
-    'liquidation prices in USDC for tokens in the format SYMBOL=price'
+    'liquidation prices in USDC for tokens in the format SYMBOL=price',
   )
   program.option('-qb, --questBoard <address>', 'contract address for questboard')
   program.parse()
